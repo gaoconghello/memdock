@@ -372,6 +372,14 @@ func (a *app) authorizeMCP(w http.ResponseWriter, r *http.Request, grant accessG
 		return value
 	}
 	projectID := get("project_id")
+	if req.Params.Name == "project_lookup" || req.Params.Name == "project_resolve" {
+		// Proposals do not write; restrict existing targets to the caller's read scope.
+		// The approval submission independently enforces write/admin permissions.
+		lookup := r.Clone(r.Context())
+		lookup.URL.Path = "/api/v1/projects/lookup"
+		lookup.Body = io.NopCloser(strings.NewReader(string(req.Params.Arguments)))
+		return a.authorizeRequest(w, lookup, grant)
+	}
 	writeProposal := req.Params.Name == "memory_save" || req.Params.Name == "memory_update" || req.Params.Name == "memory_delete"
 	if req.Params.Name == "memory_search" || req.Params.Name == "memory_list" || req.Params.Name == "project_info" || writeProposal {
 		if projectID == "" || !grant.canProject(projectID, false) {

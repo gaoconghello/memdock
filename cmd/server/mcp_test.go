@@ -41,7 +41,7 @@ func TestMCPStreamableHTTPToolsAndRead(t *testing.T) {
 	listReq.Header.Set("Accept", "application/json")
 	listRec := httptest.NewRecorder()
 	a.mcp(listRec, listReq)
-	for _, tool := range []string{`"name":"memory_search"`, `"name":"memory_save"`, `"name":"memory_list"`, `"name":"memory_update"`, `"name":"memory_delete"`, `"name":"project_info"`} {
+	for _, tool := range []string{`"name":"memory_search"`, `"name":"memory_save"`, `"name":"memory_list"`, `"name":"memory_update"`, `"name":"memory_delete"`, `"name":"project_info"`, `"name":"project_list"`, `"name":"project_lookup"`, `"name":"project_resolve"`} {
 		if !strings.Contains(listRec.Body.String(), tool) {
 			t.Fatalf("missing %s from tools/list: %s", tool, listRec.Body)
 		}
@@ -129,6 +129,70 @@ func TestMCPStreamableHTTPToolsAndRead(t *testing.T) {
 	listed := call("memory_list", `{"project_id":"`+project.ID+`"}`)
 	if !strings.Contains(listed.Body.String(), `"knowledge_base_name":"默认项目库"`) || !strings.Contains(listed.Body.String(), `"knowledge_base_type":"project"`) {
 		t.Fatalf("MCP list omitted source: %s", listed.Body)
+	}
+}
+
+func TestMCPProjectLookupAndResolve(t *testing.T) {
+	a := newMCPTestApp(t)
+	call := func(name, args string) string {
+		t.Helper()
+		result, err := a.callMCPTool(httptest.NewRequest("POST", "/mcp", nil), name, json.RawMessage(args))
+		if err != nil {
+			return err.Error()
+		}
+		data, _ := json.Marshal(result)
+		return string(data)
+	}
+	repo := "https://example.com/team/project.git"
+	args := `{"repository":"` + repo + `"}`
+	if got := call("project_lookup", args); !strings.Contains(got, "404") {
+		t.Fatalf("lookup missing: %s", got)
+	}
+	if got := call("project_resolve", args); !strings.Contains(got, "signature required") {
+		t.Fatalf("unsigned resolve: %s", got)
+	}
+	var count int
+	if err := a.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unexpected project: %d %v", count, err)
+	}
+	req := httptest.NewRequest("POST", "/api/v1/projects/resolve", strings.NewReader(args))
+	signApproval(a, req)
+	signed := `{"repository":"` + repo + `","write_signature":"` + req.Header.Get("X-MemDock-Write-Signature") + `"}`
+	if got := call("project_resolve", signed); !strings.Contains(got, "prj_") {
+		t.Fatalf("resolve: %s", got)
+	}
+	if got := call("project_lookup", args); !strings.Contains(got, "prj_") || !strings.Contains(got, "knowledge_base_id") {
+		t.Fatalf("lookup: %s", got)
+	}
+	if got := call("project_list", `{}`); !strings.Contains(got, "project") {
+		t.Fatalf("list: %s", got)
+	}
+	a.mode = "secure"
+	if got := call("project_resolve", `{"name":"new"}`); !strings.Contains(got, `approval_required`) || !strings.Contains(got, `/api/v1/projects/resolve`) {
+		t.Fatalf("proposal: %s", got)
+	}
+	if err := a.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("proposal wrote project: %d %v", count, err)
+	}
+}
+
+func TestMCPSecureProjectAccess(t *testing.T) {
+	a := newMCPTestApp(t)
+	id := createManagementProject(t, a, "protected")
+	grant := accessGrant{Role: "read"}
+	check := func(name, args string) bool {
+		body := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"` + name + `","arguments":` + args + `}}`
+		return a.authorizeMCP(httptest.NewRecorder(), httptest.NewRequest("POST", "/mcp", strings.NewReader(body)), grant)
+	}
+	if check("project_lookup", `{"project_id":"`+id+`"}`) || check("project_resolve", `{"project_id":"`+id+`"}`) {
+		t.Fatal("unauthorized project accessible")
+	}
+	if !check("project_resolve", `{"name":"new"}`) {
+		t.Fatal("new project proposal denied")
+	}
+	grant.Projects = []string{id}
+	if !check("project_lookup", `{"project_id":"`+id+`"}`) {
+		t.Fatal("authorized project lookup denied")
 	}
 }
 

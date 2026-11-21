@@ -11,7 +11,7 @@ MemDock is a shared long-term memory service for coding agents. It provides a Go
 - **Full-text search tuned for Chinese**: SQLite FTS5 `trigram` tokenizer with keyword fallback handles Chinese phrases, mixed Chinese/English queries, and technical abbreviations; BM25 ranking, category/tag filters, project-scoped by default, and a small default result set (top 5) to avoid polluting the agent's context.
 - **Project libraries and shared libraries**: each project gets a default knowledge base; shared libraries hold cross-project memory with separate read/write authorization.
 - **User-driven writes**: the server never summarizes sessions on its own — save/update/delete are triggered explicitly by the user; agents only decide when to recall ("Users decide what to remember; agents decide when to recall").
-- **Three access channels**: REST API under `/api/v1`, MCP Streamable HTTP at `/mcp` (tools: `memory_search`, `memory_save`, `memory_list`, `memory_update`, `memory_delete`, `project_info`), and Codex/Pi Agent Skills (`mem-save`, `mem-search`).
+- **Three access channels**: REST API under `/api/v1`, MCP Streamable HTTP at `/mcp` (memory tools plus `project_list`, `project_lookup`, `project_resolve`, and `project_info`), and Codex/Pi Agent Skills (`mem-save`, `mem-search`).
 - **Web management UI**: dashboard, project management (rename, bind/unbind repositories, merge, delete), memory management (search, filter, edit, delete/restore), and system status.
 - **Two security modes**: `private` for trusted networks with HMAC write-integrity protection; `secure` with tokens + project ACL, read-only agent tokens, and an independent Ed25519 approval CLI for writes.
 - **Lightweight single-service deployment**: one Go binary + SQLite, no external database, no embedding/AI model service; Docker/Compose with persistent volume, health check, and built-in backup/restore.
@@ -225,6 +225,8 @@ Health check: `GET /healthz`; management UI: `/`; MCP: `/mcp`. In Secure mode, w
 ### MCP client configuration
 
 Point the MCP client at the Streamable HTTP endpoint `/mcp` on the same server. Nothing needs to be installed client-side — the MemDock server itself is the MCP server. Private mode needs no token; Secure mode sends the agent's read token as Bearer auth. In Private mode you can also let the client write directly: set `MEMDOCK_WRITE_SECRET` on the server and pass it as an `X-MemDock-Write-Secret` header.
+
+For project identification, the client determines its own Git remote and calls `project_lookup` with `repository` (or an existing `project_id`). This lookup is read-only. For a folder without a remote, `project_list` lists accessible projects so the user can select a matching project; the client retains the selection. The remote server cannot inspect the client's working directory or maintain the Skill's local binding file. When lookup fails, an explicit user request can invoke `project_resolve` with a `repository` and/or `name` to create a project, or with an existing `project_id` and `repository` to bind it. Avoid silently creating projects during retrieval. Private mode requires the existing write secret or a one-time signature for the exact REST request. Secure mode returns an approval request; an independent admin must approve it, then update the Agent's ACL grants and restart the service before the Agent can access a newly created project. Approval request generation alone does not create a project.
 
 Pi:
 

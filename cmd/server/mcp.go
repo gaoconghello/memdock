@@ -93,6 +93,9 @@ func mcpTools() []map[string]any {
 		{"name": "memory_update", "description": "Update a memory by ID in Private mode; Secure mode returns an approval request envelope for the independent approver CLI.", "inputSchema": obj(withSignature(map[string]any{"id": str, "project_id": str, "title": str, "content": str, "category": str, "tags": map[string]any{"type": "array", "items": str}}), "id", "project_id")},
 		{"name": "memory_delete", "description": "Soft-delete or restore a memory in Private mode; Secure mode returns an approval request envelope for the independent approver CLI.", "inputSchema": obj(withSignature(map[string]any{"id": str, "project_id": str, "action": map[string]any{"type": "string", "enum": []string{"delete", "restore"}}}), "id", "project_id", "action")},
 		{"name": "project_info", "description": "Get project details including bound repositories.", "inputSchema": obj(props("project_id"), "project_id")},
+		{"name": "project_list", "description": "List accessible projects, including candidates for a local folder without a Git remote.", "inputSchema": obj(map[string]any{})},
+		{"name": "project_lookup", "description": "Read-only lookup by client-provided Git remote or project ID; does not create or bind projects.", "inputSchema": obj(props("repository", "project_id"))},
+		{"name": "project_resolve", "description": "Explicitly create a project or bind a repository after user confirmation. Private mode requires write authorization; Secure mode returns an approval request for an admin. Supply the client's repository or project name; the server cannot inspect the client's working directory.", "inputSchema": obj(withSignature(props("repository", "name", "project_id")))},
 	}
 }
 
@@ -104,12 +107,15 @@ type mcpArgumentSpec struct {
 func validateMCPArguments(name string, args map[string]json.RawMessage) error {
 	str := func(required bool) mcpArgumentSpec { return mcpArgumentSpec{kind: "string", required: required} }
 	schemas := map[string]map[string]mcpArgumentSpec{
-		"memory_search": {"project_id": str(true), "query": str(true), "knowledge_base_id": str(false), "tag": str(false), "limit": {kind: "integer"}},
-		"memory_save":   {"project_id": str(true), "knowledge_base_id": str(false), "title": str(true), "content": str(true), "category": str(false), "tags": {kind: "string_array"}, "write_signature": str(false)},
-		"memory_list":   {"project_id": str(true), "knowledge_base_id": str(false), "status": str(false), "tag": str(false)},
-		"memory_update": {"id": str(true), "project_id": str(true), "title": str(false), "content": str(false), "category": str(false), "tags": {kind: "string_array"}, "write_signature": str(false)},
-		"memory_delete": {"id": str(true), "project_id": str(true), "action": str(true), "write_signature": str(false)},
-		"project_info":  {"project_id": str(true)},
+		"memory_search":   {"project_id": str(true), "query": str(true), "knowledge_base_id": str(false), "tag": str(false), "limit": {kind: "integer"}},
+		"memory_save":     {"project_id": str(true), "knowledge_base_id": str(false), "title": str(true), "content": str(true), "category": str(false), "tags": {kind: "string_array"}, "write_signature": str(false)},
+		"memory_list":     {"project_id": str(true), "knowledge_base_id": str(false), "status": str(false), "tag": str(false)},
+		"memory_update":   {"id": str(true), "project_id": str(true), "title": str(false), "content": str(false), "category": str(false), "tags": {kind: "string_array"}, "write_signature": str(false)},
+		"memory_delete":   {"id": str(true), "project_id": str(true), "action": str(true), "write_signature": str(false)},
+		"project_info":    {"project_id": str(true)},
+		"project_list":    {},
+		"project_lookup":  {"repository": str(false), "project_id": str(false)},
+		"project_resolve": {"repository": str(false), "name": str(false), "project_id": str(false), "write_signature": str(false)},
 	}
 	schema, ok := schemas[name]
 	if !ok {
@@ -171,6 +177,14 @@ func validateMCPArguments(name string, args map[string]json.RawMessage) error {
 		return value
 	}
 	switch name {
+	case "project_lookup":
+		if strings.TrimSpace(getString("repository")) == "" && strings.TrimSpace(getString("project_id")) == "" {
+			return fmt.Errorf("repository or project_id is required")
+		}
+	case "project_resolve":
+		if strings.TrimSpace(getString("repository")) == "" && strings.TrimSpace(getString("name")) == "" && strings.TrimSpace(getString("project_id")) == "" {
+			return fmt.Errorf("repository, name, or project_id is required")
+		}
 	case "memory_search":
 		if strings.TrimSpace(getString("query")) == "" {
 			return fmt.Errorf("argument %q is required", "query")
@@ -230,6 +244,12 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 	get := func(k string) string { var s string; _ = json.Unmarshal(args[k], &s); return s }
 	var method, path string
 	switch name {
+	case "project_list":
+		method, path = "GET", "/api/v1/projects"
+	case "project_lookup":
+		method, path = "POST", "/api/v1/projects/lookup"
+	case "project_resolve":
+		method, path = "POST", "/api/v1/projects/resolve"
 	case "memory_search":
 		method, path = "POST", "/api/v1/memories/search"
 	case "memory_save":
@@ -271,7 +291,7 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 		body, _ = json.Marshal(args)
 	}
 	pathOnly := strings.SplitN(path, "?", 2)[0]
-	if a.mode == "secure" && (name == "memory_save" || name == "memory_update" || name == "memory_delete") {
+	if a.mode == "secure" && (name == "memory_save" || name == "memory_update" || name == "memory_delete" || name == "project_resolve") {
 		request := map[string]any{"method": method, "path": pathOnly, "body": json.RawMessage(body)}
 		payload, err := json.Marshal(map[string]any{"approval_required": true, "approval_request": request})
 		if err != nil {
@@ -304,6 +324,12 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 	rec := httptest.NewRecorder()
 	var handler http.HandlerFunc
 	switch name {
+	case "project_list":
+		handler = a.listProjects
+	case "project_lookup":
+		handler = a.lookupProject
+	case "project_resolve":
+		handler = a.resolveProject
 	case "memory_search":
 		handler = a.searchMemories
 	case "memory_save":
