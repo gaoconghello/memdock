@@ -137,7 +137,7 @@ func main() {
 	}
 	if mode == "private" {
 		if password := os.Getenv("MEMDOCK_ADMIN_PASSWORD"); password != "" && !validAdminPassword(password) {
-			log.Fatal("MEMDOCK_ADMIN_PASSWORD must be at least 12 characters")
+			log.Fatal("MEMDOCK_ADMIN_PASSWORD must be at least 6 characters")
 		}
 		if err := (&app{db: db}).initializeAdmin(ctx, os.Getenv("MEMDOCK_ADMIN_PASSWORD")); err != nil {
 			log.Fatal("could not initialize administrator credential")

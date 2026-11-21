@@ -27,7 +27,7 @@ func TestPrivateAdminSessionLifecycleAndCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app{db: db, mode: "private", approvalKey: []byte(strings.Repeat("k", 32))}
-	oldPassword, newPassword := "initial-admin-password", "new-admin-password-2026"
+	oldPassword, newPassword := "123456", "654321"
 	if err := a.initializeAdmin(context.Background(), oldPassword); err != nil {
 		t.Fatal(err)
 	}
@@ -322,5 +322,21 @@ func TestAdminInitialPasswordIsNotOverwritten(t *testing.T) {
 	}
 	if !verifyPassword("first-password-123", hash) || verifyPassword("replacement-password-456", hash) {
 		t.Fatal("initial password was unexpectedly replaced")
+	}
+}
+
+func TestAdminPasswordMinimumLength(t *testing.T) {
+	for _, tc := range []struct {
+		password string
+		want     bool
+	}{
+		{"12345", false},
+		{"123456", true},
+		{"一二三四五", false},
+		{"一二三四五六", true},
+	} {
+		if got := validAdminPassword(tc.password); got != tc.want {
+			t.Errorf("validAdminPassword(%q) = %v, want %v", tc.password, got, tc.want)
+		}
 	}
 }

@@ -30,7 +30,7 @@ Once running:
 - Management UI: `http://localhost:8080/`
 - MCP endpoint: `http://localhost:8080/mcp`
 
-Private mode is the default and keeps existing API/MCP automation contracts unchanged. Web Console management writes require an administrator session. Before first startup, set `MEMDOCK_ADMIN_PASSWORD` (at least 12 characters); the server stores a password hash in SQLite, and the password can later be changed in the Console. Private API/MCP reads remain unauthenticated, so keep the service on a trusted private network. Ordinary HTTP does not encrypt passwords, session cookies, or data: use direct HTTPS on MemDock (`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`) or a trusted encrypted network; never use HTTP on an untrusted network. Private mode does not support TLS terminated at a reverse proxy; proxy-terminated TLS is supported only in Secure mode.
+Private mode is the default and keeps existing API/MCP automation contracts unchanged. Web Console management writes require an administrator session. Before first startup, set `MEMDOCK_ADMIN_PASSWORD` (at least 6 characters); the server stores a password hash in SQLite, and the password can later be changed in the Console. Private API/MCP reads remain unauthenticated, so keep the service on a trusted private network. Ordinary HTTP does not encrypt passwords, session cookies, or data: use direct HTTPS on MemDock (`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`) or a trusted encrypted network; never use HTTP on an untrusted network. Private mode does not support TLS terminated at a reverse proxy; proxy-terminated TLS is supported only in Secure mode.
 
 ## Usage Example
 
@@ -39,7 +39,7 @@ A complete round trip in Private mode: start the server, save a decision from an
 **1. Start the server**
 
 ```sh
-: "${MEMDOCK_ADMIN_PASSWORD:?Set a strong administrator password of at least 12 characters first}"
+: "${MEMDOCK_ADMIN_PASSWORD:?Set a strong administrator password of at least 6 characters first}"
 MEMDOCK_MODE=private MEMDOCK_APPROVAL_KEY=$(openssl rand -hex 32) \
 MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 ```
@@ -110,7 +110,7 @@ All configuration is done through environment variables:
 | `MEMDOCK_ADDR` | all | Listen address, default `:8080`. |
 | `MEMDOCK_DB_PATH` | all | SQLite database path, default `memdock.db`. |
 | `MEMDOCK_MODE` | all | `private` (default) or `secure`. |
-| `MEMDOCK_ADMIN_PASSWORD` | private | Initial Private Console administrator password, at least 12 characters; only used when the database has no administrator credential. Inject via deployment environment; do not commit or log it. Password hash and sessions persist in SQLite. |
+| `MEMDOCK_ADMIN_PASSWORD` | private | Initial Private Console administrator password, at least 6 characters; only used when the database has no administrator credential. Inject via deployment environment; do not commit or log it. Password hash and sessions persist in SQLite. |
 | `MEMDOCK_APPROVAL_KEY` | private | HMAC key for write endpoints, at least 32 bytes; protects request integrity and prevents replay. It is not user authorization. |
 | `MEMDOCK_WRITE_SECRET` | private | Optional. At least 32 bytes. When set, clients may write with a static `X-MemDock-Write-Secret` header instead of per-request HMAC signatures — anyone holding this value can write, so treat it as a write credential. Ignored in secure mode. |
 | `MEMDOCK_READ_TOKEN` | secure | Required. At least 32 bytes; read operations only. |

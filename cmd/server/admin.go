@@ -36,7 +36,7 @@ func (a *app) initializeAdmin(ctx context.Context, password string) error {
 		return nil
 	}
 	if !validAdminPassword(password) {
-		return errors.New("administrator password must be at least 12 characters")
+		return errors.New("administrator password must be at least 6 characters")
 	}
 	hash, err := passwordHash(password)
 	if err != nil {
@@ -46,7 +46,7 @@ func (a *app) initializeAdmin(ctx context.Context, password string) error {
 	return err
 }
 
-func validAdminPassword(password string) bool { return utf8.RuneCountInString(password) >= 12 }
+func validAdminPassword(password string) bool { return utf8.RuneCountInString(password) >= 6 }
 
 func passwordHash(password string) (string, error) {
 	salt := make([]byte, 16)
@@ -255,7 +255,7 @@ func (a *app) adminChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	in, ok := readAdminCredentials(r)
 	if !ok || !validAdminPassword(in.NewPassword) {
-		writeError(w, 400, "new password must be at least 12 characters")
+		writeError(w, 400, "new password must be at least 6 characters")
 		return
 	}
 	tx, err := a.db.BeginTx(r.Context(), nil)

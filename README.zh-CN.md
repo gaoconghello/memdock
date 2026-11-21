@@ -30,7 +30,7 @@ MEMDOCK_MODE=private MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 - 管理界面：`http://localhost:8080/`
 - MCP 端点：`http://localhost:8080/mcp`
 
-Private 模式为默认模式，API/MCP 自动化契约保持不变；Web Console 的管理写入需管理员会话。首次启动前设置 `MEMDOCK_ADMIN_PASSWORD`（至少 12 位），服务将其安全哈希持久化到 SQLite；之后可在 Console 修改密码，修改会使所有旧会话失效。Private API/MCP 仍不提供读认证，必须限制在可信私有网络内。普通 HTTP 不加密密码、Cookie 会话或数据；应配置 MemDock 直连 HTTPS（`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`）或仅通过可信加密网络访问，不要在不可信网络使用 HTTP。Private 模式不支持由反向代理终止 TLS；代理 TLS 终止仅支持 Secure 模式。
+Private 模式为默认模式，API/MCP 自动化契约保持不变；Web Console 的管理写入需管理员会话。首次启动前设置 `MEMDOCK_ADMIN_PASSWORD`（至少 6 位），服务将其安全哈希持久化到 SQLite；之后可在 Console 修改密码，修改会使所有旧会话失效。Private API/MCP 仍不提供读认证，必须限制在可信私有网络内。普通 HTTP 不加密密码、Cookie 会话或数据；应配置 MemDock 直连 HTTPS（`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`）或仅通过可信加密网络访问，不要在不可信网络使用 HTTP。Private 模式不支持由反向代理终止 TLS；代理 TLS 终止仅支持 Secure 模式。
 
 ## 使用示例
 
@@ -39,7 +39,7 @@ Private 模式为默认模式，API/MCP 自动化契约保持不变；Web Consol
 **1. 启动服务**
 
 ```sh
-: "${MEMDOCK_ADMIN_PASSWORD:?请先安全设置至少 12 位管理员密码}"
+: "${MEMDOCK_ADMIN_PASSWORD:?请先安全设置至少 6 位管理员密码}"
 MEMDOCK_MODE=private MEMDOCK_APPROVAL_KEY=$(openssl rand -hex 32) \
 MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 ```
@@ -110,7 +110,7 @@ Secure 模式步骤相同，区别在于写入脚本/MCP 工具只生成审批�
 | `MEMDOCK_ADDR` | 通用 | 监听地址，默认 `:8080`。 |
 | `MEMDOCK_DB_PATH` | 通用 | SQLite 数据库路径，默认 `memdock.db`。 |
 | `MEMDOCK_MODE` | 通用 | `private`（默认）或 `secure`。 |
-| `MEMDOCK_ADMIN_PASSWORD` | private | 首次初始化 Private Console 管理员密码，至少 12 个字符；仅在数据库尚无管理员凭据时生效。妥善通过部署环境注入，勿提交或记录。密码哈希和管理员会话持久化于 SQLite。 |
+| `MEMDOCK_ADMIN_PASSWORD` | private | 首次初始化 Private Console 管理员密码，至少 6 个字符；仅在数据库尚无管理员凭据时生效。妥善通过部署环境注入，勿提交或记录。密码哈希和管理员会话持久化于 SQLite。 |
 | `MEMDOCK_APPROVAL_KEY` | private | 写接口 HMAC 密钥，至少 32 字节；用于请求完整性和防重放，不是用户授权。 |
 | `MEMDOCK_WRITE_SECRET` | private | 可选，至少 32 字节。设置后客户端可用静态 `X-MemDock-Write-Secret` 请求头写入，替代逐请求 HMAC 签名——持有该值即拥有写入能力，请当作写入凭据保管。Secure 模式忽略此值。 |
 | `MEMDOCK_READ_TOKEN` | secure | 必填，至少 32 字节，仅允许读操作。 |
@@ -158,7 +158,7 @@ Secure Web/Skill/MCP 审批文件链路提供可执行请求生成及独立 CLI 
 # Private 模式示例：生成仅本机可读的 HMAC 配置；妥善保管并勿提交。
 umask 077
 cp .env.example .env
-# 编辑 .env：设置强管理员密码（至少 12 个字符），
+# 编辑 .env：设置强管理员密码（至少 6 个字符），
 # 并将 MEMDOCK_APPROVAL_KEY 设为以下命令生成的值：
 openssl rand -hex 32
 docker compose up -d --build
