@@ -4,6 +4,18 @@
 
 MemDock 是面向 Coding Agent 的共享长期记忆服务，提供 Go/SQLite API、MCP Streamable HTTP 和 Web 管理页面。本机 Pi/Codex Skill 的检索、Secure 提案生成及自动化 CLI 审批后检索已验证；真人逐次确认、身份隔离、移动设备和生产部署验收仍未完成。
 
+## 功能特性
+
+- **项目自动识别**：通过 Git 仓库远程地址自动识别并归组项目，记忆按项目隔离，跨设备、跨 Agent 共享；支持绑定/解绑仓库和项目合并。
+- **长期记忆管理**：创建、更新（保留修改历史）、软删除、恢复和永久删除；每条记忆含标题、正文、分类、标签、来源和时间戳。
+- **支持中文的全文检索**：SQLite FTS5 `trigram` 分词器加关键词回退，覆盖中文短语、中英文混合查询和技术缩写；BM25 相关性排序、分类/标签筛选，默认限定当前项目，默认仅返回前 5 条，避免污染 Agent 上下文。
+- **项目库与共享库**：每个项目有默认知识库；共享库存放跨项目记忆，读/写权限单独授权。
+- **写入由用户驱动**：服务端不自动总结会话——保存/更新/删除均由用户明确触发，Agent 只决定何时回忆（“用户决定记住什么，Agent 决定什么时候需要回忆”）。
+- **三种接入方式**：REST API（`/api/v1`）、MCP Streamable HTTP（`/mcp`，工具：`memory_search`、`memory_save`、`memory_list`、`memory_update`、`memory_delete`、`project_info`）、Codex/Pi Agent Skill（`mem-save`、`mem-search`）。
+- **Web 管理界面**：首页概览、项目管理（重命名、绑定/解绑仓库、合并、删除）、记忆管理（搜索、筛选、编辑、删除/恢复）、系统状态。
+- **两种安全模式**：`private` 面向可信网络，写接口带 HMAC 完整性保护；`secure` 提供 token + 项目 ACL、只读 Agent token 和独立 Ed25519 审批 CLI。
+- **轻量单体部署**：单个 Go 二进制 + SQLite，无外部数据库、无 Embedding/AI 模型服务；Docker/Compose 持久化部署，内置健康检查与备份恢复。
+
 ## 快速开始
 
 需要 Go 1.24+：
@@ -19,6 +31,74 @@ MEMDOCK_MODE=private MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 - MCP 端点：`http://localhost:8080/mcp`
 
 Private 模式为默认模式，无需额外配置，但不提供应用层读认证——必须限制在可信私有网络内使用。
+
+## 使用示例
+
+以 Private 模式为例走一遍完整流程：启动服务，在 Agent 会话中保存一条决策，之后在新会话中召回它。
+
+**1. 启动服务**
+
+```sh
+MEMDOCK_MODE=private MEMDOCK_APPROVAL_KEY=$(openssl rand -hex 32) \
+MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
+```
+
+**2. 保存记忆（由用户明确触发）**
+
+在 Git 仓库内开启 Pi/Codex 会话，告诉 Agent 要记住的内容（例如“记住刚才确定的登录方案”）；Agent 调用 `mem-save` Skill，底层执行：
+
+```sh
+MEMDOCK_URL=http://localhost:8080 ./scripts/mem-save.sh \
+  "登录鉴权方案" \
+  "项目采用 JWT 身份认证，刷新令牌存于 Redis，有效期 7 天。" \
+  "auth,jwt"
+```
+
+脚本先展示预览并要求在终端输入 `y` 确认；项目从 Git 远程地址自动识别，服务端返回：
+
+```json
+{"id":"mem_xxx","knowledge_base_id":"kb_xxx","title":"登录鉴权方案","created_at":"2026-..."}
+```
+
+脚本依赖 `curl` 和 `jq`。
+
+**3. 之后召回（Agent 可按需自动检索）**
+
+在新会话中——或换一台设备、换一个 Agent 使用同一仓库——`mem-search` Skill 检索历史上下文：
+
+```sh
+MEMDOCK_URL=http://localhost:8080 ./scripts/mem-search.sh "JWT 身份认证"
+```
+
+```json
+{
+  "project_id": "prj_xxx",
+  "results": [
+    {
+      "id": "mem_xxx",
+      "title": "登录鉴权方案",
+      "content": "项目采用 JWT 身份认证，刷新令牌存于 Redis，有效期 7 天。",
+      "category": "",
+      "knowledge_base_id": "kb_xxx",
+      "knowledge_base_name": "默认项目库",
+      "knowledge_base_type": "project",
+      "updated_at": "2026-..."
+    }
+  ]
+}
+```
+
+**4. REST API / Web 界面等价操作**
+
+```sh
+curl -s -X POST http://localhost:8080/api/v1/memories/search \
+  -H 'Content-Type: application/json' \
+  -d '{"repository":"https://github.com/you/your-repo.git","query":"JWT 身份认证","limit":5}'
+```
+
+或打开 `http://localhost:8080/` 在浏览器中浏览、编辑、删除记忆。
+
+Secure 模式步骤相同，区别在于写入脚本/MCP 工具只生成审批请求文件而不直接写入，需独立审批者执行 `memdock-server approve-request`（见下方 Secure 相关章节）。
 
 ## 配置
 
