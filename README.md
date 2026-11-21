@@ -110,6 +110,7 @@ All configuration is done through environment variables:
 | `MEMDOCK_DB_PATH` | all | SQLite database path, default `memdock.db`. |
 | `MEMDOCK_MODE` | all | `private` (default) or `secure`. |
 | `MEMDOCK_APPROVAL_KEY` | private | HMAC key for write endpoints, at least 32 bytes; protects request integrity and prevents replay. It is not user authorization. |
+| `MEMDOCK_WRITE_SECRET` | private | Optional. At least 32 bytes. When set, clients may write with a static `X-MemDock-Write-Key` header instead of per-request HMAC signatures — anyone holding this value can write, so treat it as a write credential. Ignored in secure mode. |
 | `MEMDOCK_READ_TOKEN` | secure | Required. At least 32 bytes; read operations only. |
 | `MEMDOCK_WRITE_TOKEN` | secure | Required. At least 32 bytes and must differ from the read token; held only by the approval operator, authenticates write requests. |
 | `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | Required. Hex-encoded Ed25519 32-byte public key. The service never holds the approval private key. |
@@ -202,9 +203,62 @@ ln -s /path/to/memdock/skills/mem-search "$codex_skills_dir/mem-search"
 ln -s /path/to/memdock/skills/mem-save "$codex_skills_dir/mem-save"
 ```
 
+### Configuring the Skill connection
+
+The scripts talk to the server through `MEMDOCK_URL`; it has no default and must be visible to the agent's shell. Set it to the server's IP/port or hostname:
+
+```sh
+# Same machine:
+export MEMDOCK_URL=http://127.0.0.1:8080
+# LAN / another device (direct `go run` listens on all interfaces; Compose publishes 127.0.0.1 only):
+export MEMDOCK_URL=http://192.168.1.10:8080
+# Tailscale / domain with HTTPS:
+export MEMDOCK_URL=https://memdock.example
+```
+
+Launch the agent with the variable set — e.g. `MEMDOCK_URL=http://192.168.1.10:8080 pi --skill /path/to/memdock/skills/mem-search/SKILL.md` — or `export` it in your shell profile so Codex/Pi child shells inherit it. Private-mode write scripts sign requests with the HMAC key: set `MEMDOCK_APPROVAL_KEY` (same value as the server's) or point `MEMDOCK_APPROVAL_KEY_FILE` at a key file; the script still asks for interactive `y` confirmation before writing. In Secure mode set `MEMDOCK_READ_TOKEN` (the agent's read-only token) instead. Optional overrides: `MEMDOCK_PROJECT_ID` and `MEMDOCK_KNOWLEDGE_BASE_ID` to target an authorized project/library, `MEMDOCK_REPOSITORY` when a repository has multiple Git remotes.
+
 ## API & Clients
 
 Health check: `GET /healthz`; management UI: `/`; MCP: `/mcp`. In Secure mode, write operations may only be initiated by the independent approval CLI; regular Agent clients hold only the read token. Agent read scripts can use the `MEMDOCK_READ_TOKEN` environment variable; MCP clients must configure the same Bearer token for `/mcp` requests. In Private mode the scripts still use HMAC, which does not provide strict authorization. Runtime identity separation depends on deployment accounts, file permissions, terminals, and Docker daemon permissions, and must be accepted separately.
+
+### MCP client configuration
+
+Point the MCP client at the Streamable HTTP endpoint `/mcp` on the same server. Nothing needs to be installed client-side — the MemDock server itself is the MCP server. Private mode needs no token; Secure mode sends the agent's read token as Bearer auth. In Private mode you can also let the client write directly: set `MEMDOCK_WRITE_SECRET` on the server and pass it as an `X-MemDock-Write-Key` header.
+
+Pi:
+
+```sh
+pi mcp add memdock --url http://127.0.0.1:8080/mcp
+# Secure mode, token read from the environment:
+pi mcp add memdock --url https://memdock.example/mcp --bearer-token-env-var MEMDOCK_READ_TOKEN
+```
+
+The command writes the user-level `~/.pi/agent/mcp.json` (all projects); add `-l` to write the project-level `.pi/mcp.json` instead (trusted projects only). Tools appear as `mcp__memdock__memory_search`, `mcp__memdock__memory_save`, and so on; run `pi mcp list` to verify the connection.
+
+For Private-mode writes via MCP, add the write key header in `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "memdock": {
+      "url": "http://100.79.6.101:18080/mcp",
+      "headers": { "X-MemDock-Write-Key": "<MEMDOCK_WRITE_SECRET>" }
+    }
+  }
+}
+```
+
+Codex (`~/.codex/config.toml` for all projects, or `.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.memdock]
+url = "http://127.0.0.1:8080/mcp"
+# Private-mode writes without per-request HMAC:
+http_headers = { X-MemDock-Write-Key = "<MEMDOCK_WRITE_SECRET>" }
+# Secure mode only:
+# http_headers = { Authorization = "Bearer <READ_TOKEN>" }
+```
 
 ## SQLite Backup & Restore
 

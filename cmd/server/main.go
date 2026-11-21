@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 type app struct {
 	db                *sql.DB
 	approvalKey       []byte
+	writeSecret       []byte
 	approvalPublicKey ed25519.PublicKey
 	trustedProxyCIDRs []*net.IPNet
 	projectGrants     map[string]accessGrant
@@ -133,7 +135,7 @@ func main() {
 	if err := migrate(ctx, db); err != nil {
 		log.Fatal(err)
 	}
-	a := &app{db: db, approvalKey: []byte(os.Getenv("MEMDOCK_APPROVAL_KEY")), approvalPublicKey: ed25519.PublicKey(publicKey), trustedProxyCIDRs: trustedProxyCIDRs, projectGrants: projectGrants, mode: mode}
+	a := &app{db: db, approvalKey: []byte(os.Getenv("MEMDOCK_APPROVAL_KEY")), writeSecret: []byte(os.Getenv("MEMDOCK_WRITE_SECRET")), approvalPublicKey: ed25519.PublicKey(publicKey), trustedProxyCIDRs: trustedProxyCIDRs, projectGrants: projectGrants, mode: mode}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /api/v1/backup", a.backup)
@@ -520,6 +522,12 @@ func (a *app) verifyWriteSignature(w http.ResponseWriter, r *http.Request) bool 
 			return false
 		}
 	} else if len(parts) != 3 {
+		// Private-mode alternative: MEMDOCK_WRITE_SECRET enables a static
+		// X-MemDock-Write-Key header instead of per-request HMAC signing.
+		if len(a.writeSecret) >= 32 && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-MemDock-Write-Key")), a.writeSecret) == 1 {
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			return true
+		}
 		writeError(w, 401, "one-time request signature required")
 		return false
 	}

@@ -54,9 +54,12 @@ if [ "$secure_mode" = true ]; then
   exit 0
 fi
 
-key_file=${MEMDOCK_APPROVAL_KEY_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/memdock/approval.key}
-[ -r "$key_file" ] || { echo "missing per-write approval key file: $key_file" >&2; exit 1; }
-key=$(tr -d '\r\n' < "$key_file")
+key=${MEMDOCK_APPROVAL_KEY:-}
+if [ -z "$key" ]; then
+  key_file=${MEMDOCK_APPROVAL_KEY_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/memdock/approval.key}
+  [ -r "$key_file" ] || { echo "set MEMDOCK_APPROVAL_KEY or provide per-write approval key file: $key_file" >&2; exit 1; }
+  key=$(tr -d '\r\n' < "$key_file")
+fi
 [ "${#key}" -ge 32 ] || { echo "approval key must contain at least 32 bytes" >&2; exit 1; }
 request_signature() {
   timestamp=$(date +%s)

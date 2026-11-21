@@ -6,3 +6,4 @@ memdock.db-shm
 memdock.db-wal
 /server
 /memdock-server
+/server.exe

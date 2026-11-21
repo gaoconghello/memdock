@@ -286,6 +286,9 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 	req := httptest.NewRequest(method, url, bytes.NewReader(body))
 	req = req.WithContext(parent.Context())
 	req.Header.Set("Content-Type", "application/json")
+	if writeKey := parent.Header.Get("X-MemDock-Write-Key"); writeKey != "" {
+		req.Header.Set("X-MemDock-Write-Key", writeKey)
+	}
 	if signature != "" {
 		req.Header.Set("X-MemDock-Write-Signature", signature)
 	}

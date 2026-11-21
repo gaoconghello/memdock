@@ -110,6 +110,7 @@ Secure 模式步骤相同，区别在于写入脚本/MCP 工具只生成审批�
 | `MEMDOCK_DB_PATH` | 通用 | SQLite 数据库路径，默认 `memdock.db`。 |
 | `MEMDOCK_MODE` | 通用 | `private`（默认）或 `secure`。 |
 | `MEMDOCK_APPROVAL_KEY` | private | 写接口 HMAC 密钥，至少 32 字节；用于请求完整性和防重放，不是用户授权。 |
+| `MEMDOCK_WRITE_SECRET` | private | 可选，至少 32 字节。设置后客户端可用静态 `X-MemDock-Write-Key` 请求头写入，替代逐请求 HMAC 签名——持有该值即拥有写入能力，请当作写入凭据保管。Secure 模式忽略此值。 |
 | `MEMDOCK_READ_TOKEN` | secure | 必填，至少 32 字节，仅允许读操作。 |
 | `MEMDOCK_WRITE_TOKEN` | secure | 必填，至少 32 字节且必须不同于读 token；仅审批操作者持有，可认证写请求。 |
 | `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | 必填，Ed25519 32 字节公钥的十六进制字符串。服务不持有审批私钥。 |
@@ -202,9 +203,62 @@ ln -s /path/to/memdock/skills/mem-search "$codex_skills_dir/mem-search"
 ln -s /path/to/memdock/skills/mem-save "$codex_skills_dir/mem-save"
 ```
 
+### 配置 Skill 连接
+
+脚本通过 `MEMDOCK_URL` 访问服务，该变量没有默认值，必须对 Agent 的 shell 可见。按服务所在的 IP、端口或域名设置：
+
+```sh
+# 本机：
+export MEMDOCK_URL=http://127.0.0.1:8080
+# 局域网/其他设备（直接 `go run` 默认监听所有网卡；Compose 仅发布 127.0.0.1）：
+export MEMDOCK_URL=http://192.168.1.10:8080
+# Tailscale/域名 HTTPS：
+export MEMDOCK_URL=https://memdock.example
+```
+
+启动 Agent 时带上该变量——例如 `MEMDOCK_URL=http://192.168.1.10:8080 pi --skill /path/to/memdock/skills/mem-search/SKILL.md`——或在 shell 配置文件（如 `~/.bashrc`）中 `export`，让 Codex/Pi 的子 shell 继承。Private 模式的写入脚本用 HMAC 密钥签名：设置 `MEMDOCK_APPROVAL_KEY`（与服务器同值）或用 `MEMDOCK_APPROVAL_KEY_FILE` 指向密钥文件；脚本写入前仍会要求交互输 `y` 确认。Secure 模式则设置 `MEMDOCK_READ_TOKEN`（Agent 的只读 token）。可选变量：`MEMDOCK_PROJECT_ID`、`MEMDOCK_KNOWLEDGE_BASE_ID` 指定已授权的项目/知识库，仓库有多个 Git remote 时用 `MEMDOCK_REPOSITORY` 指明。
+
 ## API 与客户端
 
 健康检查：`GET /healthz`；管理界面：`/`；MCP：`/mcp`。Secure 模式写操作只可由独立审批 CLI 发起；Agent 常规客户端只持有读 token。Agent 读脚本可用 `MEMDOCK_READ_TOKEN` 环境变量；MCP 客户端需为 `/mcp` 请求配置相同的 Bearer token。Private 模式的脚本仍使用 HMAC，但不能满足严格授权。运行时的身份分离依赖部署账户、文件权限、终端及 Docker daemon 权限，需分别验收。
+
+### MCP 客户端配置
+
+把 MCP 客户端指向同一服务的 Streamable HTTP 端点 `/mcp`。客户端侧无需安装任何东西——MemDock 服务本身即 MCP server。Private 模式无需 token；Secure 模式以 Bearer 方式携带 Agent 的读 token。Private 模式下也可让客户端直接写入：在服务端设置 `MEMDOCK_WRITE_SECRET`，客户端以 `X-MemDock-Write-Key` 请求头携带即可。
+
+Pi：
+
+```sh
+pi mcp add memdock --url http://127.0.0.1:8080/mcp
+# Secure 模式，从环境变量读取 token：
+pi mcp add memdock --url https://memdock.example/mcp --bearer-token-env-var MEMDOCK_READ_TOKEN
+```
+
+该命令写入用户级 `~/.pi/agent/mcp.json`（对所有项目生效）；加 `-l` 则写入项目级 `.pi/mcp.json`（仅受信项目）。工具以 `mcp__memdock__memory_search`、`mcp__memdock__memory_save` 等名称出现；用 `pi mcp list` 验证连接。
+
+Private 模式下如需通过 MCP 直接写入，在 `~/.pi/agent/mcp.json` 中加写入密钥头：
+
+```json
+{
+  "mcpServers": {
+    "memdock": {
+      "url": "http://100.79.6.101:18080/mcp",
+      "headers": { "X-MemDock-Write-Key": "<MEMDOCK_WRITE_SECRET>" }
+    }
+  }
+}
+```
+
+Codex（`~/.codex/config.toml` 对所有项目生效，或项目根目录 `.codex/config.toml` 仅对受信项目生效）：
+
+```toml
+[mcp_servers.memdock]
+url = "http://127.0.0.1:8080/mcp"
+# Private 模式免逐请求 HMAC 直接写入：
+http_headers = { X-MemDock-Write-Key = "<MEMDOCK_WRITE_SECRET>" }
+# 仅 Secure 模式需要：
+# http_headers = { Authorization = "Bearer <READ_TOKEN>" }
+```
 
 ## SQLite 备份与恢复
 
