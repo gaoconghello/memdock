@@ -3,10 +3,7 @@
 package main
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,7 +58,7 @@ func TestStage5Benchmark100k(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	a := &app{db: db, approvalKey: []byte(strings.Repeat("k", 32)), mode: "private"}
+	a := &app{db: db, writeSecret: []byte(strings.Repeat("k", 32)), mode: "private"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/memories/search", a.searchMemories)
 	mux.HandleFunc("POST /api/v1/memories", a.createMemory)
@@ -135,17 +132,12 @@ func TestStage5Benchmark100k(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		timestamp := fmt.Sprint(time.Now().Unix())
-		nonce := fmt.Sprintf("%032x", i+11)
-		message := fmt.Sprintf("%s\n%s\nPOST\n/api/v1/memories\n%s", timestamp, nonce, saveBody)
-		mac := hmac.New(sha256.New, a.approvalKey)
-		mac.Write([]byte(message))
 		req, err := http.NewRequest("POST", server.URL+"/api/v1/memories", strings.NewReader(string(saveBody)))
 		if err != nil {
 			t.Fatal(err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-MemDock-Write-Signature", timestamp+":"+nonce+":"+hex.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("X-MemDock-Write-Secret", string(a.writeSecret))
 		start = time.Now()
 		response, err = client.Do(req)
 		if err != nil {

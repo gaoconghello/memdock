@@ -23,13 +23,13 @@ func managementApp(t *testing.T) *app {
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	return &app{db: db, approvalKey: []byte(strings.Repeat("s", 32))}
+	return &app{db: db, writeSecret: []byte(strings.Repeat("s", 32))}
 }
 func callManagement(t *testing.T, a *app, method, path, body string, handler http.HandlerFunc, write bool) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	if write {
-		signApproval(a, r)
+		addWriteSecret(a, r)
 	}
 	// Set the route ID expected by handlers, excluding the query string.
 	routePath := r.URL.Path
@@ -68,7 +68,7 @@ func createManagementProject(t *testing.T, a *app, name string) string {
 	t.Helper()
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/resolve", strings.NewReader(`{"name":"`+name+`"}`))
-	signApproval(a, req)
+	addWriteSecret(a, req)
 	a.resolveProject(w, req)
 	if w.Code != 201 {
 		t.Fatalf("create project: %d %s", w.Code, w.Body)
@@ -258,7 +258,7 @@ func TestProjectRepositoryAndKnowledgeBaseManagement(t *testing.T) {
 	}
 	createdKB := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-bases", strings.NewReader(`{"project_id":"`+project+`","name":"extra","kind":"project"}`))
-	signApproval(a, createReq)
+	addWriteSecret(a, createReq)
 	a.createKnowledgeBase(createdKB, createReq)
 	if createdKB.Code != http.StatusCreated {
 		t.Fatalf("create non-default knowledge base: %d %s", createdKB.Code, createdKB.Body)
@@ -272,7 +272,7 @@ func TestProjectRepositoryAndKnowledgeBaseManagement(t *testing.T) {
 	}
 	extraKB = extra.ID
 	sharedKBRequest := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-bases", strings.NewReader(`{"project_id":"`+project+`","name":"to-shared","kind":"project"}`))
-	signApproval(a, sharedKBRequest)
+	addWriteSecret(a, sharedKBRequest)
 	sharedKBCreated := httptest.NewRecorder()
 	a.createKnowledgeBase(sharedKBCreated, sharedKBRequest)
 	var sharedKB struct {

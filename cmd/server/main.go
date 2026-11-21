@@ -1,23 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -26,11 +19,8 @@ import (
 
 type app struct {
 	db                *sql.DB
-	approvalKey       []byte
 	writeSecret       []byte
-	approvalPublicKey ed25519.PublicKey
 	trustedProxyCIDRs []*net.IPNet
-	projectGrants     map[string]accessGrant
 	mode              string
 }
 
@@ -39,24 +29,6 @@ type apiError struct {
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "keygen" {
-		if err := generateApprovalKey(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "approve" {
-		if err := approveWrite(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "approve-request" {
-		if err := approveRequest(os.Args[2:]); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		db, err := sql.Open("sqlite", env("MEMDOCK_DB_PATH", "memdock.db"))
 		if err != nil {
@@ -82,9 +54,7 @@ func main() {
 	addr := env("MEMDOCK_ADDR", ":8080")
 	dbPath := env("MEMDOCK_DB_PATH", "memdock.db")
 	mode := env("MEMDOCK_MODE", "private")
-	readToken, writeToken := os.Getenv("MEMDOCK_READ_TOKEN"), os.Getenv("MEMDOCK_WRITE_TOKEN")
-	publicKey, keyErr := hex.DecodeString(os.Getenv("MEMDOCK_APPROVAL_PUBLIC_KEY"))
-	var projectGrants map[string]accessGrant
+	writeSecret := []byte(os.Getenv("MEMDOCK_WRITE_SECRET"))
 	tlsCert, tlsKey := os.Getenv("MEMDOCK_TLS_CERT"), os.Getenv("MEMDOCK_TLS_KEY")
 	proxyTLS := os.Getenv("MEMDOCK_TRUST_PROXY_TLS") == "true"
 	var trustedProxyCIDRs []*net.IPNet
@@ -100,15 +70,8 @@ func main() {
 	if mode != "private" && mode != "secure" {
 		log.Fatal("MEMDOCK_MODE must be private or secure")
 	}
-	if mode == "secure" && (len(readToken) < 32 || len(writeToken) < 32 || readToken == writeToken || keyErr != nil || len(publicKey) != ed25519.PublicKeySize) {
-		log.Fatal("secure mode requires distinct 32+ byte MEMDOCK_READ_TOKEN/MEMDOCK_WRITE_TOKEN and a 32-byte hex MEMDOCK_APPROVAL_PUBLIC_KEY")
-	}
-	if mode == "secure" {
-		var aclErr error
-		projectGrants, aclErr = loadAccessGrants(os.Getenv("MEMDOCK_PROJECT_ACL_FILE"), readToken, writeToken)
-		if aclErr != nil {
-			log.Fatal(aclErr)
-		}
+	if mode == "secure" && len(writeSecret) < 32 {
+		log.Fatal("secure mode requires MEMDOCK_WRITE_SECRET of at least 32 bytes")
 	}
 	if (tlsCert == "") != (tlsKey == "") || (mode == "secure" && tlsCert == "" && !proxyTLS) {
 		log.Fatal("secure mode requires both MEMDOCK_TLS_CERT/MEMDOCK_TLS_KEY or MEMDOCK_TRUST_PROXY_TLS=true")
@@ -143,7 +106,7 @@ func main() {
 			log.Fatal("could not initialize administrator credential")
 		}
 	}
-	a := &app{db: db, approvalKey: []byte(os.Getenv("MEMDOCK_APPROVAL_KEY")), writeSecret: []byte(os.Getenv("MEMDOCK_WRITE_SECRET")), approvalPublicKey: ed25519.PublicKey(publicKey), trustedProxyCIDRs: trustedProxyCIDRs, projectGrants: projectGrants, mode: mode}
+	a := &app{db: db, writeSecret: writeSecret, trustedProxyCIDRs: trustedProxyCIDRs, mode: mode}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /api/v1/admin/status", a.adminStatus)
@@ -179,7 +142,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/memories/{id}/permanent", a.permanentlyDeleteMemory)
 	mux.HandleFunc("GET /api/v1/memories/{id}/history", a.memoryHistory)
 	log.Printf("MemDock listening on %s (mode=%s)", addr, mode)
-	server := &http.Server{Addr: addr, Handler: a.authenticate(a.adminSessionMiddleware(a.authorizeProjectAccess(mux))), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: addr, Handler: a.authenticate(a.adminSessionMiddleware(mux)), ReadHeaderTimeout: 10 * time.Second}
 	if tlsCert != "" {
 		log.Fatal(server.ListenAndServeTLS(tlsCert, tlsKey))
 	}
@@ -198,7 +161,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 4 {
+	if version > 5 {
 		return fmt.Errorf("database schema version %d is newer than supported", version)
 	}
 	if version == 0 {
@@ -233,20 +196,6 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		version = 1
 	}
 	if version == 1 {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE used_write_authorizations (nonce TEXT PRIMARY KEY, used_at INTEGER NOT NULL)`); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, "PRAGMA user_version=2"); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
 		version = 2
 	}
 	if version == 2 {
@@ -290,6 +239,23 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			}
 		}
 		if _, err := tx.ExecContext(ctx, "PRAGMA user_version=4"); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		version = 4
+	}
+	if version == 4 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS used_write_authorizations`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "PRAGMA user_version=5"); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -346,9 +312,6 @@ func (a *app) listProjects(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&id, &name); err != nil {
 			writeError(w, 500, "database error")
 			return
-		}
-		if grant, ok := grantFromRequest(r); ok && !grant.canProject(id, false) {
-			continue
 		}
 		projects = append(projects, map[string]string{"id": id, "name": name})
 	}
@@ -536,95 +499,18 @@ func nullString(s string) any {
 	return s
 }
 
-// verifyWriteSignature enforces independent Ed25519 approval in secure mode and HMAC integrity in private mode.
+// verifyWriteSignature enforces the configured static write secret for API and MCP writes.
 func (a *app) verifyWriteSignature(w http.ResponseWriter, r *http.Request) bool {
 	if a.mode == "private" {
 		if _, ok := sessionFromRequest(r); ok {
 			return true
 		}
 	}
-	if a.mode == "secure" && len(a.approvalPublicKey) != ed25519.PublicKeySize {
-		writeError(w, 503, "independent approval public key is not configured")
+	provided := r.Header.Get("X-MemDock-Write-Secret")
+	if len(a.writeSecret) < 32 || len(provided) != len(a.writeSecret) || subtle.ConstantTimeCompare([]byte(provided), a.writeSecret) != 1 {
+		writeError(w, http.StatusUnauthorized, "valid X-MemDock-Write-Secret required")
 		return false
 	}
-	if a.mode != "secure" && len(a.approvalKey) < 32 {
-		writeError(w, 503, "write signature key is not configured")
-		return false
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		writeError(w, 400, "request body too large or unreadable")
-		return false
-	}
-	parts := strings.Split(r.Header.Get("X-MemDock-Write-Signature"), ":")
-	if a.mode == "secure" {
-		if len(parts) != 4 || parts[0] != "approval" {
-			writeError(w, 401, "one-time independent user approval required")
-			return false
-		}
-	} else if len(parts) != 3 {
-		// Private-mode alternative: MEMDOCK_WRITE_SECRET enables a static
-		// X-MemDock-Write-Secret header instead of per-request HMAC signing.
-		if len(a.writeSecret) >= 32 && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-MemDock-Write-Secret")), a.writeSecret) == 1 {
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			return true
-		}
-		writeError(w, 401, "one-time request signature required")
-		return false
-	}
-	index := 0
-	if a.mode == "secure" {
-		index = 1
-	}
-	timestamp, err := strconv.ParseInt(parts[index], 10, 64)
-	if err != nil || time.Since(time.Unix(timestamp, 0)) > time.Minute || time.Until(time.Unix(timestamp, 0)) > time.Minute {
-		writeError(w, 401, "request signature expired")
-		return false
-	}
-	noncePart := parts[index+1]
-	if len(noncePart) != 32 {
-		writeError(w, 401, "invalid request signature")
-		return false
-	}
-	nonce, err := hex.DecodeString(noncePart)
-	if err != nil || len(nonce) != 16 {
-		writeError(w, 401, "invalid request signature")
-		return false
-	}
-	signature, err := hex.DecodeString(parts[index+2])
-	if err != nil {
-		writeError(w, 401, "invalid request signature")
-		return false
-	}
-	message := fmt.Sprintf("%s\n%s\n%s\n%s\n%s", parts[index], noncePart, r.Method, r.URL.Path, body)
-	valid := false
-	if a.mode == "secure" {
-		valid = ed25519.Verify(a.approvalPublicKey, []byte(message), signature)
-	} else {
-		mac := hmac.New(sha256.New, a.approvalKey)
-		_, _ = mac.Write([]byte(message))
-		valid = hmac.Equal(signature, mac.Sum(nil))
-	}
-	if !valid {
-		writeError(w, 401, "invalid request signature")
-		return false
-	}
-	tx, err := a.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeError(w, 500, "database error")
-		return false
-	}
-	defer tx.Rollback()
-	_, _ = tx.ExecContext(r.Context(), `DELETE FROM used_write_authorizations WHERE used_at < ?`, time.Now().Add(-10*time.Minute).Unix())
-	if _, err := tx.ExecContext(r.Context(), `INSERT INTO used_write_authorizations(nonce,used_at) VALUES(?,?)`, noncePart, time.Now().Unix()); err != nil {
-		writeError(w, 401, "request signature already used")
-		return false
-	}
-	if err := tx.Commit(); err != nil {
-		writeError(w, 500, "database error")
-		return false
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
 	return true
 }
 
@@ -744,9 +630,6 @@ func (a *app) searchMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	base := `SELECT m.id,m.title,m.content,m.category,k.id,k.name,k.kind,m.updated_at FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.status='active' AND `
 	args := []any{}
-	if grant, ok := grantFromRequest(r); ok && !grant.canShared(false) && req.KnowledgeBaseID == "" {
-		base += `k.kind='project' AND `
-	}
 	if req.KnowledgeBaseID != "" {
 		base += `k.id=? AND (k.kind='shared' OR k.project_id=?) AND `
 		args = append(args, req.KnowledgeBaseID, req.ProjectID)

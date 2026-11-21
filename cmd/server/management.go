@@ -206,11 +206,6 @@ func (a *app) listKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "database error")
 			return
 		}
-		if grant, ok := grantFromRequest(r); ok {
-			if kind == "shared" && !grant.canShared(false) || kind == "project" && !grant.canProject(pid, false) {
-				continue
-			}
-		}
 		items = append(items, map[string]any{"id": id, "project_id": pid, "name": name, "kind": kind, "is_default": def == 1, "created_at": created})
 	}
 	if rows.Err() != nil {
@@ -375,9 +370,6 @@ func (a *app) listMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	query := `SELECT m.id,m.knowledge_base_id,k.name,k.kind,m.title,m.content,m.category,m.status,m.created_at,m.updated_at,COALESCE((SELECT json_group_array(tag) FROM (SELECT tag FROM memory_tags WHERE memory_id=m.id ORDER BY tag)), '[]') FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.status=? AND (k.kind='shared' OR k.project_id=?)`
 	args := []any{status, projectID}
-	if grant, ok := grantFromRequest(r); ok && !grant.canShared(false) && kbID == "" {
-		query += ` AND k.kind='project'`
-	}
 	if kbID != "" {
 		query += ` AND k.id=?`
 		args = append(args, kbID)
@@ -634,16 +626,6 @@ func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
 	} else if sourceKind != "project" || sourceOwner != req.ProjectID {
 		writeError(w, 404, "memory not found for project")
 		return
-	}
-	if grant, ok := grantFromRequest(r); ok {
-		if !grant.canProject(req.ProjectID, true) || sourceKind == "shared" && !grant.canShared(true) {
-			writeError(w, http.StatusForbidden, "identity is not authorized for this project or library")
-			return
-		}
-		if !grant.canProject(req.TargetProjectID, true) {
-			writeError(w, http.StatusForbidden, "identity is not authorized for this project or library")
-			return
-		}
 	}
 	var projectExists int
 	if err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, req.TargetProjectID).Scan(&projectExists); errors.Is(err, sql.ErrNoRows) {

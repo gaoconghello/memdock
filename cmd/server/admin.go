@@ -23,6 +23,11 @@ const adminSessionCookie = "memdock_admin_session"
 const adminSessionLifetime = 12 * time.Hour
 const passwordIterations = 310000
 
+func tokenDigest(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 type adminSessionContextKey struct{}
 type adminSession struct{ tokenHash string }
 type adminCredentials struct {

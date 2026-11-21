@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWebEditorUsesPrivateAdminSessionAndKeepsSecureApproval(t *testing.T) {
+func TestWebEditorUsesPrivateAdminSessionAndUnifiedSecureCredential(t *testing.T) {
 	rec := httptest.NewRecorder()
 	(&app{}).webIndex(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
@@ -20,11 +20,8 @@ func TestWebEditorUsesPrivateAdminSessionAndKeepsSecureApproval(t *testing.T) {
 		"MEMDOCK_ADMIN_PASSWORD",
 		"X-MemDock-CSRF",
 		"admin-change-password",
-		"state.mode==='secure'",
-		"生成此操作的审批请求文件",
-		"approve-request memdock-approval-request.json",
-		"Secure 模式：写操作仅导出审批请求文件",
-		"审批请求已下载，数据尚未修改",
+		"state.mode==='private'&&!state.admin",
+		"Secure 模式：所有访问均需共享密钥；通过 HTTPS 直接读写。",
 		"data-move=",
 		"target_project_id:target.id",
 		"/api/v1/memories/'+encodeURIComponent(id)+'/move",

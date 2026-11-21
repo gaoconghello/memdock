@@ -28,8 +28,8 @@ if [ -z "$remote" ] && [ -z "$project_id" ]; then
   echo "no local project binding; run mem-save once or set MEMDOCK_PROJECT_ID to select an existing project" >&2
   exit 1
 fi
-project=$(jq -nc --arg repository "$remote" --arg project_id "$project_id" '{repository:$repository} + (if $project_id=="" then {} else {project_id:$project_id} end)' | curl -fsS -H "Authorization: Bearer ${MEMDOCK_READ_TOKEN:-}" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/projects/lookup") || { echo "project is not initialized; use an explicit project setup/save action first" >&2; exit 1; }
+project=$(jq -nc --arg repository "$remote" --arg project_id "$project_id" '{repository:$repository} + (if $project_id=="" then {} else {project_id:$project_id} end)' | curl -fsS -H "X-MemDock-Write-Secret: ${MEMDOCK_WRITE_SECRET:-}" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/projects/lookup") || { echo "project is not initialized; use an explicit project setup/save action first" >&2; exit 1; }
 project_id=$(printf '%s' "$project" | jq -er '.project_id')
 kb=${MEMDOCK_KNOWLEDGE_BASE_ID:-}
 payload=$(jq -nc --arg project_id "$project_id" --arg knowledge_base_id "$kb" --arg query "$1" '{project_id:$project_id,query:$query,limit:5} + (if $knowledge_base_id=="" then {} else {knowledge_base_id:$knowledge_base_id} end)')
-printf '%s' "$payload" | curl -fsS -H "Authorization: Bearer ${MEMDOCK_READ_TOKEN:-}" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/memories/search"
+printf '%s' "$payload" | curl -fsS -H "X-MemDock-Write-Secret: ${MEMDOCK_WRITE_SECRET:-}" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/memories/search"

@@ -7,4 +7,4 @@ if [ -n "${MEMDOCK_TAG:-}" ]; then
   tag=$(jq -rn --arg value "$MEMDOCK_TAG" '$value|@uri')
   url="$url?tag=$tag"
 fi
-curl -fsS -H "Authorization: Bearer ${MEMDOCK_READ_TOKEN:-}" "$url"
+curl -fsS -H "X-MemDock-Write-Secret: ${MEMDOCK_WRITE_SECRET:-}" "$url"

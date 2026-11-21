@@ -4,8 +4,8 @@ set -eu
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then echo "usage: mem-save.sh TITLE CONTENT [TAGS_CSV]" >&2; exit 2; fi
 : "${MEMDOCK_URL:?set MEMDOCK_URL}"
 secure_mode=false
-if [ "${MEMDOCK_MODE:-}" = secure ] || [ -n "${MEMDOCK_READ_TOKEN:-}" ]; then secure_mode=true; fi
-if [ ! -t 0 ] && [ "$secure_mode" != true ]; then echo "mem-save requires an interactive terminal for Private-mode confirmation" >&2; exit 1; fi
+if [ "${MEMDOCK_MODE:-}" = secure ]; then secure_mode=true; fi
+if [ ! -t 0 ]; then echo "mem-save requires an interactive terminal for explicit user confirmation" >&2; exit 1; fi
 
 title=$1
 content=$2
@@ -36,7 +36,7 @@ binding_file=$binding_dir/$binding_key
 project_id="${MEMDOCK_PROJECT_ID:-}"
 if [ -z "$project_id" ] && [ -f "$binding_file" ]; then project_id=$(cat "$binding_file"); fi
 if [ "$secure_mode" != true ] && [ -z "$remote" ] && [ -z "$project_id" ]; then
-  matches=$(curl -fsS -H "Authorization: Bearer ${MEMDOCK_READ_TOKEN:-}" "$MEMDOCK_URL/api/v1/projects" | jq -c --arg name "$project_name" '[.projects[] | select(.name==$name)]')
+  matches=$(curl -fsS -H "X-MemDock-Write-Secret: ${MEMDOCK_WRITE_SECRET:-}" "$MEMDOCK_URL/api/v1/projects" | jq -c --arg name "$project_name" '[.projects[] | select(.name==$name)]')
   count=$(printf '%s' "$matches" | jq 'length')
   if [ "$count" -gt 0 ]; then
     printf '%s\n' '已有同名项目：' >&2
@@ -52,14 +52,14 @@ if [ "$secure_mode" != true ] && [ -z "$remote" ] && [ -z "$project_id" ]; then
 fi
 # Resolve an existing target without changing server state before confirmation.
 if [ "$secure_mode" = true ]; then
-  [ -n "${MEMDOCK_READ_TOKEN:-}" ] || { echo "set MEMDOCK_READ_TOKEN for Secure project lookup" >&2; exit 1; }
+  [ -n "${MEMDOCK_WRITE_SECRET:-}" ] || { echo "set MEMDOCK_WRITE_SECRET for Secure project lookup" >&2; exit 1; }
 fi
 project=""
 if [ -n "$project_id" ] || [ -n "$remote" ]; then
   lookup_payload=$(jq -nc --arg repository "$remote" --arg project_id "$project_id" '{repository:$repository} + (if $project_id=="" then {} else {project_id:$project_id} end)')
   # A selected ID must exist; never replace a failed selection with a new project.
   if [ -n "$project_id" ] || [ "$secure_mode" = true ]; then
-    project=$(printf '%s' "$lookup_payload" | curl -fsS -H "Authorization: Bearer ${MEMDOCK_READ_TOKEN:-}" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/projects/lookup") || exit 1
+    project=$(printf '%s' "$lookup_payload" | curl -fsS -H "X-MemDock-Write-Secret: ${MEMDOCK_WRITE_SECRET:-}" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/projects/lookup") || exit 1
   else
     # A new Git remote can be initialized after the user confirms the target.
     lookup_file=$(mktemp)
@@ -91,32 +91,12 @@ if [ -t 0 ]; then
   IFS= read -r answer
   [ "$answer" = y ] || { echo "cancelled" >&2; exit 1; }
 else
-  echo "Secure mode: preparing an approval request only; independent approval is required." >&2
+  echo "explicit confirmation is required" >&2
+  exit 1
 fi
-if [ "$secure_mode" = true ]; then
-  payload=$(jq -nc --arg project_id "$project_id" --arg knowledge_base_id "${MEMDOCK_KNOWLEDGE_BASE_ID:-}" --arg title "$title" --arg content "$content" --argjson tags "$tags_json" '{project_id:$project_id,title:$title,content:$content,tags:$tags} + (if $knowledge_base_id=="" then {} else {knowledge_base_id:$knowledge_base_id} end)')
-  script_dir=$(dirname "$0")
-  sh "$script_dir/prepare-approval.sh" POST /api/v1/memories "$payload"
-  exit 0
-fi
-
-key=${MEMDOCK_APPROVAL_KEY:-}
-if [ -z "$key" ]; then
-  key_file=${MEMDOCK_APPROVAL_KEY_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/memdock/approval.key}
-  [ -r "$key_file" ] || { echo "set MEMDOCK_APPROVAL_KEY or provide per-write approval key file: $key_file" >&2; exit 1; }
-  key=$(tr -d '\r\n' < "$key_file")
-fi
-[ "${#key}" -ge 32 ] || { echo "approval key must contain at least 32 bytes" >&2; exit 1; }
-request_signature() {
-  timestamp=$(date +%s)
-  nonce=$(openssl rand -hex 16)
-  signature=$(printf '%s\n%s\n%s\n%s\n%s' "$timestamp" "$nonce" "$1" "$2" "$3" | openssl dgst -sha256 -hmac "$key" | awk '{print $NF}')
-  signature_header="$timestamp:$nonce:$signature"
-}
-
+[ -n "${MEMDOCK_WRITE_SECRET:-}" ] && [ "${#MEMDOCK_WRITE_SECRET}" -ge 32 ] || { echo "set MEMDOCK_WRITE_SECRET (at least 32 bytes)" >&2; exit 1; }
 resolve_payload=$(jq -nc --arg repository "$remote" --arg name "$project_name" --arg project_id "$project_id" '{repository:$repository,name:$name} + (if $project_id=="" then {} else {project_id:$project_id} end)')
-request_signature POST /api/v1/projects/resolve "$resolve_payload"
-project=$(printf '%s' "$resolve_payload" | curl -fsS -H 'Content-Type: application/json' -H "X-MemDock-Write-Signature: $signature_header" -d @- "$MEMDOCK_URL/api/v1/projects/resolve")
+project=$(printf '%s' "$resolve_payload" | curl -fsS -H "X-MemDock-Write-Secret: $MEMDOCK_WRITE_SECRET" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/projects/resolve")
 project_id=$(printf '%s' "$project" | jq -er '.project_id')
 if [ -z "${MEMDOCK_PROJECT_ID:-}" ]; then
   mkdir -p "$binding_dir"
@@ -124,5 +104,4 @@ if [ -z "${MEMDOCK_PROJECT_ID:-}" ]; then
 fi
 kb=${MEMDOCK_KNOWLEDGE_BASE_ID:-}
 payload=$(jq -nc --arg project_id "$project_id" --arg knowledge_base_id "$kb" --arg title "$title" --arg content "$content" --argjson tags "$tags_json" '{project_id:$project_id,title:$title,content:$content,tags:$tags} + (if $knowledge_base_id=="" then {} else {knowledge_base_id:$knowledge_base_id} end)')
-request_signature POST /api/v1/memories "$payload"
-printf '%s' "$payload" | curl -fsS -H 'Content-Type: application/json' -H "X-MemDock-Write-Signature: $signature_header" -d @- "$MEMDOCK_URL/api/v1/memories"
+printf '%s' "$payload" | curl -fsS -H "X-MemDock-Write-Secret: $MEMDOCK_WRITE_SECRET" -H 'Content-Type: application/json' -d @- "$MEMDOCK_URL/api/v1/memories"

@@ -81,24 +81,16 @@ func mcpTools() []map[string]any {
 		}
 		return m
 	}
-	withSignature := func(p map[string]any) map[string]any {
-		q := map[string]any{}
-		for k, v := range p {
-			q[k] = v
-		}
-		q["write_signature"] = map[string]any{"type": "string", "description": "Optional Private mode HMAC signature for exact REST method/path/body. Secure calls return an approval request for the independent approver CLI."}
-		return q
-	}
 	return []map[string]any{
 		{"name": "memory_search", "description": "Search active memories in this project and shared libraries; specify a library to restrict results.", "inputSchema": obj(map[string]any{"project_id": str, "query": str, "knowledge_base_id": str, "tag": str, "limit": map[string]any{"type": "integer"}}, "project_id", "query")},
-		{"name": "memory_save", "description": "Save only after the client verifies project_id against the current directory binding or an explicit user selection; never guess a project from project_list or a name. The server cannot inspect the client directory. Private mode writes; Secure mode returns an approval request for the independent approver CLI.", "inputSchema": obj(withSignature(map[string]any{"project_id": str, "knowledge_base_id": str, "title": str, "content": str, "category": str, "tags": map[string]any{"type": "array", "items": str}}), "project_id", "title", "content")},
+		{"name": "memory_save", "description": "Save only after the client verifies project_id against the current directory binding or an explicit user selection; never guess a project from project_list or a name. The server cannot inspect the client directory.", "inputSchema": obj(map[string]any{"project_id": str, "knowledge_base_id": str, "title": str, "content": str, "category": str, "tags": map[string]any{"type": "array", "items": str}}, "project_id", "title", "content")},
 		{"name": "memory_list", "description": "List active or deleted memories in a project, optionally filtering by library or tag.", "inputSchema": obj(map[string]any{"project_id": str, "knowledge_base_id": str, "status": str, "tag": str}, "project_id")},
-		{"name": "memory_update", "description": "Update a memory by ID in Private mode; Secure mode returns an approval request envelope for the independent approver CLI.", "inputSchema": obj(withSignature(map[string]any{"id": str, "project_id": str, "title": str, "content": str, "category": str, "tags": map[string]any{"type": "array", "items": str}}), "id", "project_id")},
-		{"name": "memory_delete", "description": "Soft-delete or restore a memory in Private mode; Secure mode returns an approval request envelope for the independent approver CLI.", "inputSchema": obj(withSignature(map[string]any{"id": str, "project_id": str, "action": map[string]any{"type": "string", "enum": []string{"delete", "restore"}}}), "id", "project_id", "action")},
+		{"name": "memory_update", "description": "Update a memory by ID.", "inputSchema": obj(map[string]any{"id": str, "project_id": str, "title": str, "content": str, "category": str, "tags": map[string]any{"type": "array", "items": str}}, "id", "project_id")},
+		{"name": "memory_delete", "description": "Soft-delete or restore a memory.", "inputSchema": obj(map[string]any{"id": str, "project_id": str, "action": map[string]any{"type": "string", "enum": []string{"delete", "restore"}}}, "id", "project_id", "action")},
 		{"name": "project_info", "description": "Get project details including bound repositories.", "inputSchema": obj(props("project_id"), "project_id")},
 		{"name": "project_list", "description": "List accessible projects as candidates; for an unbound local folder the user must choose a project, never select one by guessing.", "inputSchema": obj(map[string]any{})},
 		{"name": "project_lookup", "description": "Read-only lookup by client-provided Git remote or project ID; does not create or bind projects.", "inputSchema": obj(props("repository", "project_id"))},
-		{"name": "project_resolve", "description": "After user confirmation, create a project using name and/or repository, omitting project_id; the server generates and returns the ID. To select an existing project or bind its repository, provide its existing project_id. Private mode requires write authorization; Secure mode returns an approval request for an admin. The server cannot inspect the client's working directory.", "inputSchema": obj(withSignature(props("repository", "name", "project_id")))},
+		{"name": "project_resolve", "description": "After user confirmation, create a project using name and/or repository, omitting project_id; the server generates and returns the ID. To select an existing project or bind its repository, provide its existing project_id. The server cannot inspect the client's working directory.", "inputSchema": obj(props("repository", "name", "project_id"))},
 	}
 }
 
@@ -111,14 +103,14 @@ func validateMCPArguments(name string, args map[string]json.RawMessage) error {
 	str := func(required bool) mcpArgumentSpec { return mcpArgumentSpec{kind: "string", required: required} }
 	schemas := map[string]map[string]mcpArgumentSpec{
 		"memory_search":   {"project_id": str(true), "query": str(true), "knowledge_base_id": str(false), "tag": str(false), "limit": {kind: "integer"}},
-		"memory_save":     {"project_id": str(true), "knowledge_base_id": str(false), "title": str(true), "content": str(true), "category": str(false), "tags": {kind: "string_array"}, "write_signature": str(false)},
+		"memory_save":     {"project_id": str(true), "knowledge_base_id": str(false), "title": str(true), "content": str(true), "category": str(false), "tags": {kind: "string_array"}},
 		"memory_list":     {"project_id": str(true), "knowledge_base_id": str(false), "status": str(false), "tag": str(false)},
-		"memory_update":   {"id": str(true), "project_id": str(true), "title": str(false), "content": str(false), "category": str(false), "tags": {kind: "string_array"}, "write_signature": str(false)},
-		"memory_delete":   {"id": str(true), "project_id": str(true), "action": str(true), "write_signature": str(false)},
+		"memory_update":   {"id": str(true), "project_id": str(true), "title": str(false), "content": str(false), "category": str(false), "tags": {kind: "string_array"}},
+		"memory_delete":   {"id": str(true), "project_id": str(true), "action": str(true)},
 		"project_info":    {"project_id": str(true)},
 		"project_list":    {},
 		"project_lookup":  {"repository": str(false), "project_id": str(false)},
-		"project_resolve": {"repository": str(false), "name": str(false), "project_id": str(false), "write_signature": str(false)},
+		"project_resolve": {"repository": str(false), "name": str(false), "project_id": str(false)},
 	}
 	schema, ok := schemas[name]
 	if !ok {
@@ -282,9 +274,7 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
 	var body []byte
-	signature := get("write_signature")
 	if method != "GET" {
-		delete(args, "write_signature")
 		if name == "memory_update" || name == "memory_delete" {
 			delete(args, "id")
 		}
@@ -294,14 +284,6 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 		body, _ = json.Marshal(args)
 	}
 	pathOnly := strings.SplitN(path, "?", 2)[0]
-	if a.mode == "secure" && (name == "memory_save" || name == "memory_update" || name == "memory_delete" || name == "project_resolve") {
-		request := map[string]any{"method": method, "path": pathOnly, "body": json.RawMessage(body)}
-		payload, err := json.Marshal(map[string]any{"approval_required": true, "approval_request": request})
-		if err != nil {
-			return nil, fmt.Errorf("could not encode approval request")
-		}
-		return map[string]any{"content": []any{map[string]string{"type": "text", "text": string(payload)}}, "structuredContent": json.RawMessage(payload), "isError": false}, nil
-	}
 	url := path
 	if !strings.HasPrefix(url, "/") {
 		return nil, fmt.Errorf("invalid tool path")
@@ -311,9 +293,6 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 	req.Header.Set("Content-Type", "application/json")
 	if writeKey := parent.Header.Get("X-MemDock-Write-Secret"); writeKey != "" {
 		req.Header.Set("X-MemDock-Write-Secret", writeKey)
-	}
-	if signature != "" {
-		req.Header.Set("X-MemDock-Write-Signature", signature)
 	}
 	if name == "memory_update" || name == "memory_delete" || name == "project_info" {
 		parts := strings.Split(strings.Trim(pathOnly, "/"), "/")

@@ -23,7 +23,7 @@ func TestHTTPMemoryListWithSingleConnectionAndTags(t *testing.T) {
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	a := &app{db: db, approvalKey: []byte(strings.Repeat("s", 32))}
+	a := &app{db: db, writeSecret: []byte(strings.Repeat("s", 32))}
 	projectID := createManagementProject(t, a, "single-connection")
 	var kbID string
 	if err := db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, projectID).Scan(&kbID); err != nil {

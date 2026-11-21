@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-MemDock is a shared long-term memory service for coding agents. It provides a Go/SQLite HTTP API, an MCP Streamable HTTP endpoint, and a web management UI. Retrieval through local Pi/Codex skills, Secure proposal generation, and post-CLI-approval retrieval have been verified; per-write human confirmation, identity isolation, mobile access, and production deployment acceptance are still outstanding.
+MemDock is a shared long-term memory service for coding agents. It provides a Go/SQLite HTTP API, an MCP Streamable HTTP endpoint, and a web management UI. Agent scripts require explicit interactive confirmation for writes. Production deployment acceptance and mobile access remain outstanding.
 
 ## Features
 
@@ -13,7 +13,7 @@ MemDock is a shared long-term memory service for coding agents. It provides a Go
 - **User-driven writes**: the server never summarizes sessions on its own — save/update/delete are triggered explicitly by the user; agents only decide when to recall ("Users decide what to remember; agents decide when to recall").
 - **Three access channels**: REST API under `/api/v1`, MCP Streamable HTTP at `/mcp` (memory tools plus `project_list`, `project_lookup`, `project_resolve`, and `project_info`), and Codex/Pi Agent Skills (`mem-save`, `mem-search`).
 - **Web management UI**: dashboard, project management (rename, bind/unbind repositories, merge, delete), memory management (search, filter, edit, delete/restore), and system status.
-- **Two security modes**: `private` for trusted networks with HMAC write-integrity protection; `secure` with tokens + project ACL, read-only agent tokens, and an independent Ed25519 approval CLI for writes.
+- **Two security modes**: `private` for trusted networks with unauthenticated reads and shared-secret API/MCP writes; `secure` requires HTTPS and the shared secret for all requests except health checks.
 - **Lightweight single-service deployment**: one Go binary + SQLite, no external database, no embedding/AI model service; Docker/Compose with persistent volume, health check, and built-in backup/restore.
 
 ## Quick Start
@@ -30,7 +30,7 @@ Once running:
 - Management UI: `http://localhost:8080/`
 - MCP endpoint: `http://localhost:8080/mcp`
 
-Private mode is the default and keeps existing API/MCP automation contracts unchanged. Web Console management writes require an administrator session. Before first startup, set `MEMDOCK_ADMIN_PASSWORD` (at least 6 characters); the server stores a password hash in SQLite, and the password can later be changed in the Console. Private API/MCP reads remain unauthenticated, so keep the service on a trusted private network. Ordinary HTTP does not encrypt passwords, session cookies, or data: use direct HTTPS on MemDock (`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`) or a trusted encrypted network; never use HTTP on an untrusted network. Private mode does not support TLS terminated at a reverse proxy; proxy-terminated TLS is supported only in Secure mode.
+Private mode is the default and keeps existing API/MCP automation contracts unchanged. Web Console management writes require an administrator session. Before first startup, set `MEMDOCK_ADMIN_PASSWORD` (at least 6 characters); the server stores a password hash in SQLite, and the password can later be changed in the Console. Private API/MCP reads remain unauthenticated, so keep the service on a trusted private network. Set `MEMDOCK_WRITE_SECRET` to a random value of at least 32 bytes for API/MCP writes. Ordinary HTTP does not encrypt passwords, session cookies, or data: use direct HTTPS on MemDock (`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`) or a trusted encrypted network; never use HTTP on an untrusted network. Private mode does not support TLS terminated at a reverse proxy; proxy-terminated TLS is supported only in Secure mode.
 
 ## Usage Example
 
@@ -40,7 +40,7 @@ A complete round trip in Private mode: start the server, save a decision from an
 
 ```sh
 : "${MEMDOCK_ADMIN_PASSWORD:?Set a strong administrator password of at least 6 characters first}"
-MEMDOCK_MODE=private MEMDOCK_APPROVAL_KEY=$(openssl rand -hex 32) \
+MEMDOCK_MODE=private MEMDOCK_WRITE_SECRET=$(openssl rand -hex 32) \
 MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 ```
 
@@ -99,7 +99,7 @@ curl -s -X POST http://localhost:8080/api/v1/memories/search \
 
 Or open `http://localhost:8080/` to browse, edit, and delete memories in the browser.
 
-In Secure mode steps are identical except that write scripts/MCP tools produce an approval request file instead of writing directly; an independent approver runs `memdock-server approve-request` (see the Secure sections below).
+In Secure mode, provide the shared `MEMDOCK_WRITE_SECRET` to the client. Writes occur directly after the script's explicit user confirmation.
 
 ## Configuration
 
@@ -111,91 +111,61 @@ All configuration is done through environment variables:
 | `MEMDOCK_DB_PATH` | all | SQLite database path, default `memdock.db`. |
 | `MEMDOCK_MODE` | all | `private` (default) or `secure`. |
 | `MEMDOCK_ADMIN_PASSWORD` | private | Initial Private Console administrator password, at least 6 characters; only used when the database has no administrator credential. Inject via deployment environment; do not commit or log it. Password hash and sessions persist in SQLite. |
-| `MEMDOCK_APPROVAL_KEY` | private | HMAC key for write endpoints, at least 32 bytes; protects request integrity and prevents replay. It is not user authorization. |
-| `MEMDOCK_WRITE_SECRET` | private | Optional. At least 32 bytes. When set, clients may write with a static `X-MemDock-Write-Secret` header instead of per-request HMAC signatures — anyone holding this value can write, so treat it as a write credential. Ignored in secure mode. |
-| `MEMDOCK_READ_TOKEN` | secure | Required. At least 32 bytes; read operations only. |
-| `MEMDOCK_WRITE_TOKEN` | secure | Required. At least 32 bytes and must differ from the read token; held only by the approval operator, authenticates write requests. |
-| `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | Required. Hex-encoded Ed25519 32-byte public key. The service never holds the approval private key. |
-| `MEMDOCK_PROJECT_ACL_FILE` | secure | Required. Project ACL JSON file; credentials are registered only as SHA-256 digests. Missing, unlisted, or unauthorized projects are denied by default. |
+| `MEMDOCK_WRITE_SECRET` | all | At least 32 bytes. Required in Secure mode for all access except `/healthz`; in Private mode protects API/MCP writes. Send `X-MemDock-Write-Secret`; Bearer or Basic username `memdock` are also accepted. Anyone holding it can read/write in Secure mode. |
 | `MEMDOCK_TLS_CERT`, `MEMDOCK_TLS_KEY` | all | When set as a pair, the service serves HTTPS directly. |
 | `MEMDOCK_TRUST_PROXY_TLS` | secure | `true` to trust proxy-terminated TLS; must also set `MEMDOCK_TRUST_PROXY_CIDRS` (comma-separated CIDRs). The service verifies that the connection source IP is inside the trusted CIDRs and that `X-Forwarded-Proto` is exactly `https`. The proxy must still strip client-supplied forwarding headers and rewrite them; never let untrusted sources reach the backend port directly. Private mode does not support TLS termination at a proxy. |
 
-The Private Web Console uses a random HttpOnly, SameSite=Strict session cookie (Secure on direct HTTPS) and CSRF tokens. Sessions expire after 12 hours and are invalidated by logout or password change. Once the database has an administrator password, changing the environment variable does not reset it; change it in the Console instead. If no password is initialized, the Console prompts the operator to set the variable and restart. This session grants writes only through the Private Web Console; it does not change Secure-mode approval or replace existing HMAC/static-secret automation interfaces.
+The Private Web Console uses a random HttpOnly, SameSite=Strict session cookie and CSRF tokens. Secure mode requires the shared secret for browser access too; use HTTP Basic username `memdock` and the secret as password. Secure browser writes reject cross-origin `Origin` and `Sec-Fetch-Site` requests to mitigate CSRF; non-browser clients without browser-origin headers remain supported. Existing `MEMDOCK_APPROVAL_KEY`, HMAC signatures, separate read/write tokens, ACL files, and Ed25519 approval setup are no longer used.
 
-### Secure mode authorization model
+### Secure mode authentication
 
-Secure startup fails if the read/write credentials, public key, project ACL, or TLS/trusted-proxy configuration is missing. `/healthz` needs no authentication; all other API/MCP/Web access uses a Bearer token, or Web Basic password matching the token SHA-256 registered in the ACL.
+Secure startup requires a `MEMDOCK_WRITE_SECRET` of at least 32 bytes and direct TLS certificates or a trusted TLS proxy boundary. `/healthz` is the only unauthenticated route. All REST, MCP, Console, and backup requests require the same secret. A secret holder can perform all operations; project isolation remains data-level, not user ACL-based.
 
-ACL `role` is `read`, `write`, or `admin`. Project permissions for read/write come only from the IDs explicitly listed under `projects` (an empty list grants no projects); the shared library is authorized separately via `shared_read` / `shared_write`. Project creation, global counts in status, and full database backup are available to `admin` only. Unauthorized projects are rejected; project/knowledge-base listings return only authorized items. Read tokens are enforced read-only, and write tokens must also be explicitly granted project scope in the ACL. Changing the ACL file requires a service restart. Private mode remains full-service access within a trusted network with no project identity ACL.
+Separate Secure read/write tokens, project ACLs, and Admin tokens have been removed. Configure one `MEMDOCK_WRITE_SECRET` for the single trusted operator/client.
 
-### Secure ACL example
+### Secure writes
 
-Replace tokens with real random values of at least 32 bytes; store only the SHA-256 digests in `config/project-acl.json` with file permissions `0600`:
+Secure clients can write directly after explicit user intent; there is no separate approval CLI or per-write signature. Legacy approval request files and `keygen` / `approve-request` commands are unsupported.
 
-```json
-{
-  "credentials": [
-    {"token_sha256":"<READ_TOKEN_SHA256>","role":"read","projects":["prj_example"],"shared_read":true},
-    {"token_sha256":"<WRITE_TOKEN_SHA256>","role":"write","projects":["prj_example"],"shared_read":true,"shared_write":true},
-    {"token_sha256":"<ADMIN_TOKEN_SHA256>","role":"admin"}
-  ]
-}
-```
-
-Digest example: `printf %s "$TOKEN" | sha256sum | cut -d ' ' -f1`. `MEMDOCK_READ_TOKEN` and `MEMDOCK_WRITE_TOKEN` must map to the `read` / `write` credentials in the ACL; Admin uses a separate credential that is never given to the Agent. New projects are created by the Admin using `MEMDOCK_APPROVER_TOKEN` (the approval CLI defaults to `MEMDOCK_WRITE_TOKEN`), then the project ID is added to the grants of the tokens that need access and the service is restarted; shared-library and full-backup permissions are configured separately.
-
-### Secure write approval flow
-
-Secure writes are generated by the Web UI, the write skill script, and MCP tools as `{"method":"POST","path":"/api/v1/...","body":{...}}` approval request files; they never modify data directly. The Agent hands the file to an independent approver over a trusted channel; the approver runs `memdock-server approve-request REQUEST.json` in an OS account/terminal the Agent cannot control. The CLI shows the full request body and requires typing `approve` in a TTY, then signs and submits the HTTPS request directly with the Ed25519 private key and the approver's credentials. Ordinary project writes use the ACL-authorized `MEMDOCK_WRITE_TOKEN`; Admin project initialization uses `MEMDOCK_APPROVER_TOKEN`. The legacy form `approve METHOD /api/v1/path BODY.json` still works. Private key permissions are `0600`; the server holds only the public key. **If the Agent shares a UID with the approver, can access the approval private key/write token, controls the approval terminal, or controls the Docker daemon, the isolation boundary is void.**
-
-The Secure Web/Skill/MCP approval-file chain provides executable request generation and independent CLI approval; handoff across real, distinct OS identities/terminals still requires deployment acceptance. Private mode keeps the HMAC scheme (integrity/replay protection only, not strict approval).
+Private mode leaves reads unauthenticated and requires the same secret for API/MCP writes; Console writes retain the administrator session.
 
 ## Docker / Compose
 
-The repository ships [.env.example](.env.example) and an [ACL example](config/project-acl.example.json). Compose reads the root `.env` automatically and passes `MEMDOCK_ADMIN_PASSWORD` to the Private server; copy the example, set a strong initial password before first startup, and never commit credentials. The password is persisted as a hash in SQLite, so removing the environment value afterward does not disable login. Private mode needs no ACL file.
+The repository ships [.env.example](.env.example). Compose reads the root `.env` automatically; configure `MEMDOCK_WRITE_SECRET` (at least 32 bytes) and, for Private Console, an initial `MEMDOCK_ADMIN_PASSWORD`. Never commit credentials.
 
 ```sh
-# Private mode example: generate host-local HMAC config; keep it safe and uncommitted.
+# Configure one shared write secret; keep it safe and uncommitted.
 umask 077
 cp .env.example .env
 # Edit .env: set MEMDOCK_ADMIN_PASSWORD to a strong password (12+ characters),
-# and set MEMDOCK_APPROVAL_KEY to the value produced by:
+# and set MEMDOCK_WRITE_SECRET to the value produced by:
 openssl rand -hex 32
 docker compose up -d --build
 docker compose ps
 docker compose logs -f memdock
 ```
 
-Secure mode additionally copies `config/project-acl.example.json` to `config/project-acl.json`, replaces the digests and project IDs, and completes the token, public key, and TLS configuration as described below. The placeholders in the examples must not be used to start the service. When using `docker run --env-file .env` directly, server environment variables in the file pass into the container; Compose-specific port and mount variables still need separate `-p`, `-v`, and similar flags.
+For Secure mode, set `MEMDOCK_MODE=secure`, configure `MEMDOCK_WRITE_SECRET`, and provide TLS directly or configure a trusted proxy TLS boundary. The old ACL and token configuration is obsolete. When using `docker run --env-file .env` directly, server environment variables in the file pass into the container; Compose-specific port and mount variables still need separate `-p`, `-v`, and similar flags.
 
 By default the service is published only to the host's `127.0.0.1:8080`, the container runs as non-root UID/GID 10001, and SQLite lives in the persistent volume `memdock-data`. For Private mode, use direct TLS configured on MemDock or access its HTTP listener only through a trusted encrypted network such as the Tailnet; do not use `tailscale serve` or another TLS-terminating proxy for the Private Console, because Private mode accepts HTTPS origins/cookies only when TLS reaches the server directly. Secure mode supports a trusted TLS-terminating proxy as described below. Never publish the default HTTP port to the public internet.
 
 ### TLS options for Secure mode
 
-Secure can terminate TLS at a trusted reverse proxy: ensure the network only lets the proxy reach the backend, set `MEMDOCK_MODE=secure`, the read/write tokens, the public key, the project ACL file, `MEMDOCK_TRUST_PROXY_TLS=true`, and `MEMDOCK_TRUST_PROXY_CIDRS` matching the proxy's actual source addresses. Any source that spoofs `X-Forwarded-Proto: https` is still rejected because its source IP is untrusted; a trusted proxy must override the forwarding headers submitted by clients. Alternatively, provide a certificate/key so the service serves TLS itself: Compose mounts `${MEMDOCK_TLS_DIR:-./certs}` read-only at `/certs`, and `.env` sets `MEMDOCK_TLS_CERT=/certs/fullchain.pem` and `MEMDOCK_TLS_KEY=/certs/privkey.pem`. The certificate and private key must be readable by container UID 10001 and not modifiable by the Agent.
+Secure may terminate TLS at a trusted reverse proxy: ensure only the proxy reaches the backend, set `MEMDOCK_TRUST_PROXY_TLS=true` and `MEMDOCK_TRUST_PROXY_CIDRS` to the proxy source CIDRs. The proxy must override forwarding headers. Alternatively provide `MEMDOCK_TLS_CERT` and `MEMDOCK_TLS_KEY` for direct TLS.
 
-### Secure identity setup (performed by the deployment operator)
+### Secure setup
 
-1. Run `memdock-server keygen /secure/path/approval.key` under an **OS account different from the Agent's**; save the Ed25519 public key it prints into the server's `MEMDOCK_APPROVAL_PUBLIC_KEY`. Keep the private key only in the approver's account, created with `0600`.
-2. Generate `MEMDOCK_READ_TOKEN` and `MEMDOCK_WRITE_TOKEN`, each at least 32 random bytes and different from each other; generate a separate Admin token. Compute the SHA-256 of each token and grant explicit role, project IDs, and shared permissions in `config/project-acl.json`. Set the ACL file to `0600`; Secure Compose mounts `./config` read-only and reads `/config/project-acl.json`. `.env` sets `MEMDOCK_MODE=secure`, the read/write tokens, the public key, and TLS settings, or the trusted-proxy CIDRs. Secure does not use Private mode's HMAC `MEMDOCK_APPROVAL_KEY`. The Agent holds only its `read` token; the Admin token is never given to the Agent. Never allow the Agent to access the Docker daemon or deployment files containing credentials.
-3. Web, the Secure write skill script, and MCP write tools generate approval request JSON instead of writing directly. The Agent hands the file to the approver over a trusted channel; the approver runs in their own interactive terminal:
+Configure `MEMDOCK_MODE=secure`, set a random `MEMDOCK_WRITE_SECRET` of at least 32 bytes, and configure direct TLS or a trusted TLS proxy boundary. Give this secret only to clients authorized for all Secure operations. Secure Web, REST, MCP, and scripts authenticate with the same secret and perform direct writes after explicit user intent. Old approval CLI, token, public-key and ACL configuration is unsupported.
 
-```sh
-MEMDOCK_URL=https://memdock.example \
-MEMDOCK_WRITE_TOKEN='approver-only write token' \
-MEMDOCK_APPROVAL_PRIVATE_KEY_FILE=/secure/path/approval.key \
-./memdock-server approve-request request.json
-```
 
-The CLI displays the full JSON to be submitted (terminal control/bidirectional text is escaped) and requires typing `approve` in the terminal before sending a one-time request. The signature binds the HTTP method, path, and body, is valid for about one minute, and the server rejects replays; the final REST write also checks the approval token's ACL scope on the target project/knowledge base. New projects are created by the Admin and added to an authorized grant, then the service is restarted. For Admin operations, set `MEMDOCK_APPROVER_TOKEN='Admin token'` (it overrides the write token). Never hand the private key, any approval token, or the approver's terminal to the Agent.
 
-Secure Web downloads approval request files; Secure `mem-save` generates a `0600` request file after the user explicitly triggers it, and also asks for `y` when a TTY is present — without a TTY it only produces a request pending independent approval; the mem-update/delete/kb-create/project-rename scripts write request files after interactive confirmation; MCP write tools return a structured `approval_request`. Request files must be handed to an independent approver over a trusted channel. Generating a file does not mean it was approved or saved.
+Write scripts require an interactive terminal and explicit `y` confirmation before making changes. MCP clients must attach `X-MemDock-Write-Secret` to `/mcp` requests.
 
 ```json
 {"project_id":"PROJECT_ID","title":"user-confirmed title","content":"user-confirmed content"}
 ```
 
-To create a new project/bind a repository, the Admin prepares `{"method":"POST","path":"/api/v1/projects/resolve","body":{"name":"project name","repository":"https://example/repo.git"}}`, sets `MEMDOCK_APPROVER_TOKEN`, and runs `approve-request project.json`; then add the new project ID to the needed identity grants and restart the service. Agents cannot access the new project before the ACL is updated.
+
 
 ## Agent Skills
 
@@ -221,24 +191,23 @@ export MEMDOCK_URL=http://192.168.1.10:8080
 export MEMDOCK_URL=https://memdock.example
 ```
 
-Launch the agent with the variable set — e.g. `MEMDOCK_URL=http://192.168.1.10:8080 pi --skill /path/to/memdock/skills/mem-search/SKILL.md` — or `export` it in your shell profile so Codex/Pi child shells inherit it. Private-mode write scripts sign requests with the HMAC key: set `MEMDOCK_APPROVAL_KEY` (same value as the server's) or point `MEMDOCK_APPROVAL_KEY_FILE` at a key file; the script still asks for interactive `y` confirmation before writing. In Secure mode set `MEMDOCK_READ_TOKEN` (the agent's read-only token) instead. Optional overrides: `MEMDOCK_PROJECT_ID` and `MEMDOCK_KNOWLEDGE_BASE_ID` to target an authorized project/library, `MEMDOCK_REPOSITORY` when a repository has multiple Git remotes.
+Launch the agent with `MEMDOCK_URL` and `MEMDOCK_WRITE_SECRET` set (Secure mode uses the secret for reads and writes). Write scripts require interactive `y` confirmation. Optional overrides: `MEMDOCK_PROJECT_ID`, `MEMDOCK_KNOWLEDGE_BASE_ID`, and `MEMDOCK_REPOSITORY`.
 
 ## API & Clients
 
-Health check: `GET /healthz`; management UI: `/`; MCP: `/mcp`. In Secure mode, write operations may only be initiated by the independent approval CLI; regular Agent clients hold only the read token. Agent read scripts can use the `MEMDOCK_READ_TOKEN` environment variable; MCP clients must configure the same Bearer token for `/mcp` requests. In Private mode the scripts still use HMAC, which does not provide strict authorization. Runtime identity separation depends on deployment accounts, file permissions, terminals, and Docker daemon permissions, and must be accepted separately.
+Health check: `GET /healthz`; management UI: `/`; MCP: `/mcp`. Secure requires `X-MemDock-Write-Secret` on all requests except health checks. Private reads remain unauthenticated; API/MCP writes require that header.
 
 ### MCP client configuration
 
-Point the MCP client at the Streamable HTTP endpoint `/mcp` on the same server. Nothing needs to be installed client-side — the MemDock server itself is the MCP server. Private mode needs no token; Secure mode sends the agent's read token as Bearer auth. In Private mode you can also let the client write directly: set `MEMDOCK_WRITE_SECRET` on the server and pass it as an `X-MemDock-Write-Secret` header.
+Point the MCP client at the Streamable HTTP endpoint `/mcp` on the same server. Nothing needs to be installed client-side — the MemDock server itself is the MCP server. Private reads need no credential; API/MCP writes require `X-MemDock-Write-Secret`. Secure mode requires that header for every route except `/healthz`.
 
-For project identification, the client determines its own Git remote and calls `project_lookup` with `repository` (or an existing `project_id`). This lookup is read-only. For a folder without a remote, `project_list` lists accessible projects so the user can select a matching project; the client retains the selection. The remote server cannot inspect the client's working directory or maintain the Skill's local binding file. Before MCP saves, verify the project ID against the current directory binding or an explicit user selection; do not guess from project names or the project list. The save script displays the directory, target project and ID before interactive confirmation. A temporary MEMDOCK_PROJECT_ID override does not replace the directory binding; verify inherited overrides before use. When lookup fails, an explicit user request can invoke `project_resolve` with a `repository` and/or `name` to create a project, or with an existing `project_id` and `repository` to bind it. Avoid silently creating projects during retrieval. Private mode requires the existing write secret or a one-time signature for the exact REST request. Secure mode returns an approval request; an independent admin must approve it, then update the Agent's ACL grants and restart the service before the Agent can access a newly created project. Approval request generation alone does not create a project.
+For project identification, the client determines its own Git remote and calls `project_lookup` with `repository` (or an existing `project_id`). Verify the project ID against the current directory binding or explicit user selection; do not guess from names. Private mode reads are unauthenticated and writes require the shared secret. Secure mode requires the same shared secret on all requests.
 
 Pi:
 
 ```sh
 pi mcp add memdock --url http://127.0.0.1:8080/mcp
-# Secure mode, token read from the environment:
-pi mcp add memdock --url https://memdock.example/mcp --bearer-token-env-var MEMDOCK_READ_TOKEN
+# Secure mode also configures X-MemDock-Write-Secret in the MCP client's headers.
 ```
 
 The command writes the user-level `~/.pi/agent/mcp.json` (all projects); add `-l` to write the project-level `.pi/mcp.json` instead (trusted projects only). Tools appear as `mcp__memdock__memory_search`, `mcp__memdock__memory_save`, and so on; run `pi mcp list` to verify the connection.
@@ -261,20 +230,18 @@ Codex (`~/.codex/config.toml` for all projects, or `.codex/config.toml` in a tru
 ```toml
 [mcp_servers.memdock]
 url = "http://127.0.0.1:8080/mcp"
-# Private-mode writes without per-request HMAC:
+# Secure mode requires the secret on every request; Private mode requires it for writes.
 http_headers = { X-MemDock-Write-Secret = "<MEMDOCK_WRITE_SECRET>" }
-# Secure mode only:
-# http_headers = { Authorization = "Bearer <READ_TOKEN>" }
 ```
 
 ## SQLite Backup & Restore
 
-With an Admin identity, a consistent snapshot can be downloaded: `GET /api/v1/backup`. Save the response file using HTTPS and the Admin Bearer token (or browser Basic auth); the endpoint creates a standalone snapshot with SQLite `VACUUM INTO` and runs `integrity_check` before returning it.
+A consistent snapshot can be downloaded from `GET /api/v1/backup`. Secure mode requires the shared secret; the endpoint creates a standalone snapshot with SQLite `VACUUM INTO` and runs `integrity_check` before returning it.
 
 Before restoring, save a full snapshot via the backup API, then stop the service and preserve the original database directory (including any WAL/SHM sidecars):
 
 ```sh
-curl --fail --cacert trusted-ca.pem -H "Authorization: Bearer $MEMDOCK_READ_TOKEN" \
+curl --fail --cacert trusted-ca.pem -H "X-MemDock-Write-Secret: $MEMDOCK_WRITE_SECRET" \
   https://memdock.example/api/v1/backup -o ./before-restore.sqlite
 docker compose stop memdock
 docker compose cp memdock:/data ./before-restore-data

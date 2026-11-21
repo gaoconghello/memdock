@@ -25,137 +25,12 @@ func newMCPTestApp(t *testing.T) *app {
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	return &app{db: db, approvalKey: []byte(strings.Repeat("k", 32))}
+	return &app{db: db, writeSecret: []byte(strings.Repeat("k", 32))}
 }
 
-func TestMCPStreamableHTTPToolsAndRead(t *testing.T) {
+func TestSecureMCPProjectCreateAndSaveWithUnifiedSecret(t *testing.T) {
 	a := newMCPTestApp(t)
-	initReq := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`))
-	initReq.Header.Set("Accept", "application/json, text/event-stream")
-	initRec := httptest.NewRecorder()
-	a.mcp(initRec, initReq)
-	if initRec.Code != 200 || !strings.Contains(initRec.Body.String(), `"protocolVersion":"2025-03-26"`) {
-		t.Fatalf("initialize: %d %s", initRec.Code, initRec.Body)
-	}
-	listReq := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`))
-	listReq.Header.Set("Accept", "application/json")
-	listRec := httptest.NewRecorder()
-	a.mcp(listRec, listReq)
-	var toolList struct {
-		Result struct {
-			Tools []struct {
-				Name        string `json:"name"`
-				InputSchema struct {
-					Required json.RawMessage `json:"required"`
-				} `json:"inputSchema"`
-			} `json:"tools"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(listRec.Body.Bytes(), &toolList); err != nil {
-		t.Fatal(err)
-	}
-	for _, tool := range toolList.Result.Tools {
-		if string(tool.InputSchema.Required) == "null" || len(tool.InputSchema.Required) == 0 {
-			t.Fatalf("%s required must be an array: %s", tool.Name, tool.InputSchema.Required)
-		}
-		var required []string
-		if err := json.Unmarshal(tool.InputSchema.Required, &required); err != nil {
-			t.Fatalf("%s required: %v", tool.Name, err)
-		}
-	}
-	for _, tool := range []string{`"name":"memory_search"`, `"name":"memory_save"`, `"name":"memory_list"`, `"name":"memory_update"`, `"name":"memory_delete"`, `"name":"project_info"`, `"name":"project_list"`, `"name":"project_lookup"`, `"name":"project_resolve"`} {
-		if !strings.Contains(listRec.Body.String(), tool) {
-			t.Fatalf("missing %s from tools/list: %s", tool, listRec.Body)
-		}
-	}
-	projectRec := httptest.NewRecorder()
-	projectRequest := httptest.NewRequest(http.MethodPost, "/api/v1/projects/resolve", strings.NewReader(`{"name":"mcp-test"}`))
-	signApproval(a, projectRequest)
-	a.resolveProject(projectRec, projectRequest)
-	var project struct {
-		ID string `json:"project_id"`
-	}
-	if err := json.Unmarshal(projectRec.Body.Bytes(), &project); err != nil || project.ID == "" {
-		t.Fatalf("project setup: %s %v", projectRec.Body, err)
-	}
-	call := func(name, args string) *httptest.ResponseRecorder {
-		body := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"` + name + `","arguments":` + args + `}}`
-		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
-		req.Header.Set("Accept", "application/json")
-		rec := httptest.NewRecorder()
-		a.mcp(rec, req)
-		return rec
-	}
-	info := call("project_info", `{"project_id":"`+project.ID+`"}`)
-	if info.Code != 200 || !strings.Contains(info.Body.String(), project.ID) {
-		t.Fatalf("project_info: %d %s", info.Code, info.Body)
-	}
-	write := call("memory_save", `{"project_id":"`+project.ID+`","title":"no auth","content":"must not write"}`)
-	if !strings.Contains(write.Body.String(), `"isError":true`) || !strings.Contains(write.Body.String(), "one-time request signature required") {
-		t.Fatalf("unsigned MCP write was not denied: %s", write.Body)
-	}
-	var count int
-	if err := a.db.QueryRow(`SELECT count(*) FROM memories`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("unsigned tool call persisted memory: count=%d err=%v", count, err)
-	}
-	invalidBody := `{"content":"invalid signature","project_id":"` + project.ID + `","title":"must not persist"}`
-	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(invalidBody))
-	signApproval(a, invalidRequest)
-	parts := strings.Split(invalidRequest.Header.Get("X-MemDock-Write-Signature"), ":")
-	parts[2] = strings.Repeat("0", 64)
-	invalidSignature := strings.Join(parts, ":")
-	invalidCall := call("memory_save", `{"project_id":"`+project.ID+`","title":"must not persist","content":"invalid signature","write_signature":"`+invalidSignature+`"}`)
-	if !strings.Contains(invalidCall.Body.String(), `"isError":true`) || !strings.Contains(invalidCall.Body.String(), "invalid request signature") {
-		t.Fatalf("invalid MCP signature was not rejected: %s", invalidCall.Body)
-	}
-	if err := a.db.QueryRow(`SELECT count(*) FROM memories`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("invalid signature persisted memory: count=%d err=%v", count, err)
-	}
-	// The MCP adapter passes the standard one-time signature to the existing REST handler.
-	signedBody := `{"content":"mcp signed","project_id":"` + project.ID + `","title":"signed"}`
-	signedRequest := httptest.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(signedBody))
-	signApproval(a, signedRequest)
-	sig := signedRequest.Header.Get("X-MemDock-Write-Signature")
-	signedCall := call("memory_save", `{"project_id":"`+project.ID+`","title":"signed","content":"mcp signed","write_signature":"`+sig+`"}`)
-	if strings.Contains(signedCall.Body.String(), `"isError":true`) || !strings.Contains(signedCall.Body.String(), `"id":"mem_`) {
-		t.Fatalf("signed MCP save failed: %s", signedCall.Body)
-	}
-	var savedID string
-	if err := a.db.QueryRow(`SELECT id FROM memories WHERE title='signed'`).Scan(&savedID); err != nil {
-		t.Fatal(err)
-	}
-	deleteBody := `{"project_id":"` + project.ID + `"}`
-	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v1/memories/"+savedID, strings.NewReader(deleteBody))
-	signApproval(a, deleteRequest)
-	deleteSignature := deleteRequest.Header.Get("X-MemDock-Write-Signature")
-	for _, args := range []string{
-		`{"id":"` + savedID + `","project_id":"` + project.ID + `","write_signature":"` + deleteSignature + `"}`,
-		`{"id":"` + savedID + `","project_id":"` + project.ID + `","action":"purge","write_signature":"` + deleteSignature + `"}`,
-	} {
-		invalidDelete := call("memory_delete", args)
-		if !strings.Contains(invalidDelete.Body.String(), `"isError":true`) || !strings.Contains(invalidDelete.Body.String(), "invalid arguments") {
-			t.Fatalf("invalid/missing delete action was not rejected before signed mutation: %s", invalidDelete.Body)
-		}
-	}
-	var memoryStatus string
-	if err := a.db.QueryRow(`SELECT status FROM memories WHERE id=?`, savedID).Scan(&memoryStatus); err != nil || memoryStatus != "active" {
-		t.Fatalf("invalid MCP delete action changed memory status=%q err=%v", memoryStatus, err)
-	}
-	var kbID string
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, project.ID).Scan(&kbID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('source-check',?,'visible','library source','now','now')`, kbID); err != nil {
-		t.Fatal(err)
-	}
-	listed := call("memory_list", `{"project_id":"`+project.ID+`"}`)
-	if !strings.Contains(listed.Body.String(), `"knowledge_base_name":"默认项目库"`) || !strings.Contains(listed.Body.String(), `"knowledge_base_type":"project"`) {
-		t.Fatalf("MCP list omitted source: %s", listed.Body)
-	}
-}
-
-func TestMCPProjectCreateAndSaveWithWriteSecret(t *testing.T) {
-	a := newMCPTestApp(t)
+	a.mode = "secure"
 	a.writeSecret = []byte(strings.Repeat("s", 32))
 	call := func(name, args string) (map[string]json.RawMessage, bool) {
 		t.Helper()
@@ -163,8 +38,9 @@ func TestMCPProjectCreateAndSaveWithWriteSecret(t *testing.T) {
 		req := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("X-MemDock-Write-Secret", string(a.writeSecret))
+		req.TLS = &tlsState
 		rec := httptest.NewRecorder()
-		a.mcp(rec, req)
+		a.authenticate(http.HandlerFunc(a.mcp)).ServeHTTP(rec, req)
 		var response struct {
 			Result struct {
 				Structured map[string]json.RawMessage `json:"structuredContent"`
@@ -189,73 +65,13 @@ func TestMCPProjectCreateAndSaveWithWriteSecret(t *testing.T) {
 	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE title='test'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("memory count %d: %v", count, err)
 	}
+	search, failed := call("memory_search", `{"project_id":"`+id+`","query":"saved"}`)
+	if failed || !strings.Contains(string(search["results"]), "saved") {
+		t.Fatalf("authenticated MCP search failed: %s", search)
+	}
 	_, failed = call("project_resolve", `{"project_id":"missing","name":"new"}`)
 	if !failed {
 		t.Fatal("unknown existing project ID must be rejected")
-	}
-}
-
-func TestMCPProjectLookupAndResolve(t *testing.T) {
-	a := newMCPTestApp(t)
-	call := func(name, args string) string {
-		t.Helper()
-		result, err := a.callMCPTool(httptest.NewRequest("POST", "/mcp", nil), name, json.RawMessage(args))
-		if err != nil {
-			return err.Error()
-		}
-		data, _ := json.Marshal(result)
-		return string(data)
-	}
-	repo := "https://example.com/team/project.git"
-	args := `{"repository":"` + repo + `"}`
-	if got := call("project_lookup", args); !strings.Contains(got, "404") {
-		t.Fatalf("lookup missing: %s", got)
-	}
-	if got := call("project_resolve", args); !strings.Contains(got, "signature required") {
-		t.Fatalf("unsigned resolve: %s", got)
-	}
-	var count int
-	if err := a.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("unexpected project: %d %v", count, err)
-	}
-	req := httptest.NewRequest("POST", "/api/v1/projects/resolve", strings.NewReader(args))
-	signApproval(a, req)
-	signed := `{"repository":"` + repo + `","write_signature":"` + req.Header.Get("X-MemDock-Write-Signature") + `"}`
-	if got := call("project_resolve", signed); !strings.Contains(got, "prj_") {
-		t.Fatalf("resolve: %s", got)
-	}
-	if got := call("project_lookup", args); !strings.Contains(got, "prj_") || !strings.Contains(got, "knowledge_base_id") {
-		t.Fatalf("lookup: %s", got)
-	}
-	if got := call("project_list", `{}`); !strings.Contains(got, "project") {
-		t.Fatalf("list: %s", got)
-	}
-	a.mode = "secure"
-	if got := call("project_resolve", `{"name":"new"}`); !strings.Contains(got, `approval_required`) || !strings.Contains(got, `/api/v1/projects/resolve`) {
-		t.Fatalf("proposal: %s", got)
-	}
-	if err := a.db.QueryRow(`SELECT count(*) FROM projects`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("proposal wrote project: %d %v", count, err)
-	}
-}
-
-func TestMCPSecureProjectAccess(t *testing.T) {
-	a := newMCPTestApp(t)
-	id := createManagementProject(t, a, "protected")
-	grant := accessGrant{Role: "read"}
-	check := func(name, args string) bool {
-		body := `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"` + name + `","arguments":` + args + `}}`
-		return a.authorizeMCP(httptest.NewRecorder(), httptest.NewRequest("POST", "/mcp", strings.NewReader(body)), grant)
-	}
-	if check("project_lookup", `{"project_id":"`+id+`"}`) || check("project_resolve", `{"project_id":"`+id+`"}`) {
-		t.Fatal("unauthorized project accessible")
-	}
-	if !check("project_resolve", `{"name":"new"}`) {
-		t.Fatal("new project proposal denied")
-	}
-	grant.Projects = []string{id}
-	if !check("project_lookup", `{"project_id":"`+id+`"}`) {
-		t.Fatal("authorized project lookup denied")
 	}
 }
 

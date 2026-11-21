@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"crypto/subtle"
 	"database/sql"
 	"fmt"
 	"net"
@@ -28,26 +28,24 @@ func (a *app) authenticate(next http.Handler) http.Handler {
 				writeError(w, 400, "HTTPS is required")
 				return
 			}
-			provided := ""
-			if h := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(h, "Bearer ") {
-				provided = strings.TrimPrefix(h, "Bearer ")
-			} else if u, p, ok := r.BasicAuth(); ok && u == "memdock" {
-				provided = p
+			provided := strings.TrimSpace(r.Header.Get("X-MemDock-Write-Secret"))
+			if provided == "" {
+				if h := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(h, "Bearer ") {
+					provided = strings.TrimPrefix(h, "Bearer ")
+				} else if u, p, ok := r.BasicAuth(); ok && u == "memdock" {
+					provided = p
+				}
 			}
-			grant, known := a.projectGrants[tokenDigest(provided)]
-			if len(provided) < 32 {
-				known = false
-			}
-			if !known {
+			if len(a.writeSecret) < 32 || len(provided) != len(a.writeSecret) || subtle.ConstantTimeCompare([]byte(provided), a.writeSecret) != 1 {
 				w.Header().Set("WWW-Authenticate", `Basic realm="MemDock"`)
 				writeError(w, http.StatusUnauthorized, "authentication required")
 				return
 			}
-			if isWriteRequest(r) && grant.Role != "write" && grant.Role != "admin" {
-				writeError(w, http.StatusForbidden, "write credential required")
+			if isWriteRequest(r) && !secureRequestSameOrigin(r) {
+				writeError(w, http.StatusForbidden, "same-origin request required")
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), accessContextKey{}, grant))
+			r.Header.Set("X-MemDock-Write-Secret", provided)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -94,15 +92,25 @@ func isWriteRequest(r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 		return false
 	}
-	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/projects/lookup" || r.URL.Path == "/api/v1/memories/search" || r.URL.Path == "/mcp") {
-		return false
-	}
-	if r.URL.Path == "/mcp" && r.Method == http.MethodPost {
-		// MCP write tools only prepare an approval envelope. Actual writes go
-		// through the REST endpoint using the independent approver credential.
+	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/projects/lookup" || r.URL.Path == "/api/v1/memories/search") {
 		return false
 	}
 	return true
+}
+
+func secureRequestSameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		fetchSite := r.Header.Get("Sec-Fetch-Site")
+		return fetchSite == "" || fetchSite == "same-origin"
+	}
+	scheme := ""
+	if r.TLS != nil {
+		scheme = "https"
+	} else if os.Getenv("MEMDOCK_TRUST_PROXY_TLS") == "true" && r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme != "" && strings.EqualFold(origin, scheme+"://"+r.Host)
 }
 
 func (a *app) backup(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +205,7 @@ func validateMemDockDatabase(db *sql.DB) error {
 		return fmt.Errorf("integrity check failed: %s", integrity)
 	}
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version < 1 || version > 4 {
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version < 1 || version > 5 {
 		return fmt.Errorf("unsupported schema version %d", version)
 	}
 	required := map[string][]string{
@@ -210,9 +218,6 @@ func validateMemDockDatabase(db *sql.DB) error {
 	objects := map[string]string{
 		"memories_ai": "trigger", "memories_ad": "trigger", "memories_au": "trigger",
 		"project_default_kb": "index", "memories_kb_status": "index",
-	}
-	if version >= 2 {
-		required["used_write_authorizations"] = []string{"nonce", "used_at"}
 	}
 	if version >= 3 {
 		required["memory_tags"] = []string{"memory_id", "tag"}

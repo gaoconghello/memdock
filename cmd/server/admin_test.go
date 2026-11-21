@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -26,7 +24,7 @@ func TestPrivateAdminSessionLifecycleAndCSRF(t *testing.T) {
 	if err := migrate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	a := &app{db: db, mode: "private", approvalKey: []byte(strings.Repeat("k", 32))}
+	a := &app{db: db, mode: "private", writeSecret: []byte(strings.Repeat("k", 32))}
 	oldPassword, newPassword := "123456", "654321"
 	if err := a.initializeAdmin(context.Background(), oldPassword); err != nil {
 		t.Fatal(err)
@@ -255,23 +253,6 @@ func waitForDBWaitCount(t *testing.T, db *sql.DB, target int64) {
 			t.Fatalf("database waiter did not reach count %d", target)
 		}
 		time.Sleep(time.Millisecond)
-	}
-}
-
-func TestSecureModeDoesNotAcceptPrivateAdminSession(t *testing.T) {
-	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := &app{mode: "secure", approvalPublicKey: publicKey}
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(`{}`))
-	r = r.WithContext(context.WithValue(r.Context(), adminSessionContextKey{}, adminSession{tokenHash: "session"}))
-	w := httptest.NewRecorder()
-	if a.verifyWriteSignature(w, r) {
-		t.Fatal("Secure accepted a Private admin session as write approval")
-	}
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body)
 	}
 }
 
