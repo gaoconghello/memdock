@@ -1,31 +1,51 @@
 # MemDock
 
-MemDock 是面向 Coding Agent 的共享长期记忆服务，提供 Go/SQLite API、MCP Streamable HTTP 和 Web 管理页面。前几阶段未提交的实现均保留。本机 Pi/Codex Skill 的检索、Secure 提案生成及自动化 CLI 审批后检索已验证；真人逐次确认、身份隔离、移动设备和生产部署验收仍未完成。
+English | [简体中文](README.zh-CN.md)
 
-## 本地运行
+MemDock is a shared long-term memory service for coding agents. It provides a Go/SQLite HTTP API, an MCP Streamable HTTP endpoint, and a web management UI. Retrieval through local Pi/Codex skills, Secure proposal generation, and post-CLI-approval retrieval have been verified; per-write human confirmation, identity isolation, mobile access, and production deployment acceptance are still outstanding.
 
-需要 Go 1.24+：
+## Quick Start
+
+Requires Go 1.24+:
 
 ```sh
 MEMDOCK_MODE=private MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 ```
 
-配置：
+Once running:
 
-- `MEMDOCK_ADDR`：监听地址，默认 `:8080`。
-- `MEMDOCK_DB_PATH`：SQLite 数据库路径，默认 `memdock.db`。
-- `MEMDOCK_MODE`：`private`（默认）或 `secure`。Private 不提供应用层读认证，必须限制在可信私有网络。
-- `MEMDOCK_APPROVAL_KEY`：写接口 HMAC 密钥，至少 32 字节；用于请求完整性和防重放，不是用户授权。
-- `MEMDOCK_READ_TOKEN`：Secure 模式必填，至少 32 字节，仅允许读操作。
-- `MEMDOCK_WRITE_TOKEN`：Secure 模式必填，至少 32 字节且必须不同于读 token；仅审批操作者持有，可认证写请求。
-- `MEMDOCK_APPROVAL_PUBLIC_KEY`：Secure 模式必填，Ed25519 32 字节公钥的十六进制字符串。服务不持有审批私钥。
-- `MEMDOCK_PROJECT_ACL_FILE`：Secure 模式必填，项目访问控制 JSON 文件；凭据只以 SHA-256 摘要登记，未配置、未列入 ACL 或未授权项目均默认拒绝。
-- `MEMDOCK_TLS_CERT`、`MEMDOCK_TLS_KEY`：成对配置时服务直接提供 HTTPS。
-- `MEMDOCK_TRUST_PROXY_TLS=true`：只信任代理 TLS 模式；必须同时配置 `MEMDOCK_TRUST_PROXY_CIDRS`（逗号分隔 CIDR）。服务校验连接源 IP 位于可信 CIDR 且 `X-Forwarded-Proto` 精确为 `https`。代理仍须清理客户端转发头并重写；不能让不可信来源直接访问后端端口。
+- Health check: `GET /healthz` (no authentication)
+- Management UI: `http://localhost:8080/`
+- MCP endpoint: `http://localhost:8080/mcp`
 
-Secure 启动时缺少读/写凭据、公钥、项目 ACL 或 TLS/可信代理配置会失败。健康检查 `/healthz` 无需认证；其余 API/MCP/Web 以 Bearer token 或 Web Basic 密码匹配 ACL 中登记的 token SHA-256。ACL `role` 为 `read`、`write` 或 `admin`；read/write 的项目权限仅来自 `projects` 明确列出的 ID（空列表无项目权限），共享库另用 `shared_read` / `shared_write` 授权。项目创建、状态中的全局数量和完整数据库备份仅 `admin` 可用；未授权项目返回拒绝，项目/知识库列表只返回已授权项。读 token 强制为只读，写 token 也必须在 ACL 中显式授予项目范围。修改 ACL 文件需重启服务。Private 仍是受信网络内的全服务访问，不提供项目身份 ACL。
+Private mode is the default and requires no further configuration, but it provides no application-layer read authentication — keep it on a trusted private network.
 
-Secure ACL 示例（把 token 换成至少 32 字节的真实随机值，仅将 SHA-256 摘要保存到 `config/project-acl.json`，文件权限设为 `0600`）：
+## Configuration
+
+All configuration is done through environment variables:
+
+| Variable | Mode | Description |
+| --- | --- | --- |
+| `MEMDOCK_ADDR` | all | Listen address, default `:8080`. |
+| `MEMDOCK_DB_PATH` | all | SQLite database path, default `memdock.db`. |
+| `MEMDOCK_MODE` | all | `private` (default) or `secure`. |
+| `MEMDOCK_APPROVAL_KEY` | private | HMAC key for write endpoints, at least 32 bytes; protects request integrity and prevents replay. It is not user authorization. |
+| `MEMDOCK_READ_TOKEN` | secure | Required. At least 32 bytes; read operations only. |
+| `MEMDOCK_WRITE_TOKEN` | secure | Required. At least 32 bytes and must differ from the read token; held only by the approval operator, authenticates write requests. |
+| `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | Required. Hex-encoded Ed25519 32-byte public key. The service never holds the approval private key. |
+| `MEMDOCK_PROJECT_ACL_FILE` | secure | Required. Project ACL JSON file; credentials are registered only as SHA-256 digests. Missing, unlisted, or unauthorized projects are denied by default. |
+| `MEMDOCK_TLS_CERT`, `MEMDOCK_TLS_KEY` | all | When set as a pair, the service serves HTTPS directly. |
+| `MEMDOCK_TRUST_PROXY_TLS` | secure | `true` to trust proxy-terminated TLS; must also set `MEMDOCK_TRUST_PROXY_CIDRS` (comma-separated CIDRs). The service verifies that the connection source IP is inside the trusted CIDRs and that `X-Forwarded-Proto` is exactly `https`. The proxy must still strip client-supplied forwarding headers and rewrite them; never let untrusted sources reach the backend port directly. |
+
+### Secure mode authorization model
+
+Secure startup fails if the read/write credentials, public key, project ACL, or TLS/trusted-proxy configuration is missing. `/healthz` needs no authentication; all other API/MCP/Web access uses a Bearer token, or Web Basic password matching the token SHA-256 registered in the ACL.
+
+ACL `role` is `read`, `write`, or `admin`. Project permissions for read/write come only from the IDs explicitly listed under `projects` (an empty list grants no projects); the shared library is authorized separately via `shared_read` / `shared_write`. Project creation, global counts in status, and full database backup are available to `admin` only. Unauthorized projects are rejected; project/knowledge-base listings return only authorized items. Read tokens are enforced read-only, and write tokens must also be explicitly granted project scope in the ACL. Changing the ACL file requires a service restart. Private mode remains full-service access within a trusted network with no project identity ACL.
+
+### Secure ACL example
+
+Replace tokens with real random values of at least 32 bytes; store only the SHA-256 digests in `config/project-acl.json` with file permissions `0600`:
 
 ```json
 {
@@ -37,59 +57,63 @@ Secure ACL 示例（把 token 换成至少 32 字节的真实随机值，仅将 
 }
 ```
 
-生成摘要示例：`printf %s "$TOKEN" | sha256sum | cut -d ' ' -f1`。`MEMDOCK_READ_TOKEN` 与 `MEMDOCK_WRITE_TOKEN` 必须各自对应 ACL 中的 `read` / `write` 凭据；Admin 使用单独凭据，不能交给 Agent。新项目由 Admin 使用 `MEMDOCK_APPROVER_TOKEN`（审批 CLI 默认使用 `MEMDOCK_WRITE_TOKEN`）建立，并把项目 ID 加入需要授权的 token grant 后重启服务；共享库和整库备份权限单独配置。
+Digest example: `printf %s "$TOKEN" | sha256sum | cut -d ' ' -f1`. `MEMDOCK_READ_TOKEN` and `MEMDOCK_WRITE_TOKEN` must map to the `read` / `write` credentials in the ACL; Admin uses a separate credential that is never given to the Agent. New projects are created by the Admin using `MEMDOCK_APPROVER_TOKEN` (the approval CLI defaults to `MEMDOCK_WRITE_TOKEN`), then the project ID is added to the grants of the tokens that need access and the service is restarted; shared-library and full-backup permissions are configured separately.
 
-Secure 写入由 Web、写入 Skill 脚本和 MCP 工具生成 `{"method":"POST","path":"/api/v1/...","body":{...}}` 审批请求文件，不直接修改数据。Agent 通过可信渠道把文件交给独立审批者；审批者在无法被 Agent 控制的 OS 账户/终端运行 `memdock-server approve-request REQUEST.json`。CLI 显示完整请求正文并要求 TTY 输入 `approve`，随后用 Ed25519 私钥及审批者凭据直接提交 HTTPS 请求。普通项目写入使用 ACL 授权的 `MEMDOCK_WRITE_TOKEN`；Admin 项目初始化使用 `MEMDOCK_APPROVER_TOKEN`。旧式 `approve METHOD /api/v1/path BODY.json` 仍可用。私钥权限为 `0600`，服务端仅持有公钥。**如果 Agent 与审批者同 UID、能访问审批私钥/写 token、控制审批终端或 Docker daemon，隔离边界即失效。**
+### Secure write approval flow
 
-Secure Web/Skill/MCP 审批文件链路提供可执行请求生成及独立 CLI 审批；真实不同 OS 身份/终端交接仍需部署验收。Private 模式仍沿用 HMAC（仅完整性/防重放，不提供严格审批）。
+Secure writes are generated by the Web UI, the write skill script, and MCP tools as `{"method":"POST","path":"/api/v1/...","body":{...}}` approval request files; they never modify data directly. The Agent hands the file to an independent approver over a trusted channel; the approver runs `memdock-server approve-request REQUEST.json` in an OS account/terminal the Agent cannot control. The CLI shows the full request body and requires typing `approve` in a TTY, then signs and submits the HTTPS request directly with the Ed25519 private key and the approver's credentials. Ordinary project writes use the ACL-authorized `MEMDOCK_WRITE_TOKEN`; Admin project initialization uses `MEMDOCK_APPROVER_TOKEN`. The legacy form `approve METHOD /api/v1/path BODY.json` still works. Private key permissions are `0600`; the server holds only the public key. **If the Agent shares a UID with the approver, can access the approval private key/write token, controls the approval terminal, or controls the Docker daemon, the isolation boundary is void.**
+
+The Secure Web/Skill/MCP approval-file chain provides executable request generation and independent CLI approval; handoff across real, distinct OS identities/terminals still requires deployment acceptance. Private mode keeps the HMAC scheme (integrity/replay protection only, not strict approval).
 
 ## Docker / Compose
 
-仓库提供 [.env.example](.env.example) 和 [ACL 示例](config/project-acl.example.json)。Compose 会自动读取根目录的 `.env`；复制示例并填写实际值，切勿提交凭据。Private 模式不需要 ACL 文件。
+The repository ships [.env.example](.env.example) and an [ACL example](config/project-acl.example.json). Compose reads the root `.env` automatically; copy the examples and fill in real values, and never commit credentials. Private mode needs no ACL file.
 
 ```sh
-# Private 模式示例：生成仅本机可读的 HMAC 配置；妥善保管并勿提交。
+# Private mode example: generate host-local HMAC config; keep it safe and uncommitted.
 umask 077
 cp .env.example .env
-# 编辑 .env，将 MEMDOCK_APPROVAL_KEY 设为以下命令生成的值：
+# Edit .env and set MEMDOCK_APPROVAL_KEY to the value produced by:
 openssl rand -hex 32
 docker compose up -d --build
 docker compose ps
 docker compose logs -f memdock
 ```
 
-Secure 模式还需复制 `config/project-acl.example.json` 为 `config/project-acl.json`，替换其中的摘要和项目 ID，并按下方步骤完成 token、公钥及 TLS 配置。示例中的占位符不能直接用于启动。直接使用 `docker run --env-file .env` 时，文件中的服务端环境变量会传入容器；Compose 专用的端口及挂载目录变量仍需通过 `-p`、`-v` 等参数单独配置。
+Secure mode additionally copies `config/project-acl.example.json` to `config/project-acl.json`, replaces the digests and project IDs, and completes the token, public key, and TLS configuration as described below. The placeholders in the examples must not be used to start the service. When using `docker run --env-file .env` directly, server environment variables in the file pass into the container; Compose-specific port and mount variables still need separate `-p`, `-v`, and similar flags.
 
-默认仅发布到宿主机 `127.0.0.1:8080`，容器以 UID/GID 10001 非 root 运行，SQLite 位于持久卷 `memdock-data`。部署到 Tailnet 可使用 `tailscale serve` 将本机端口以受信任 HTTPS 暴露；不要直接将默认 HTTP 端口发布到公网。
+By default the service is published only to the host's `127.0.0.1:8080`, the container runs as non-root UID/GID 10001, and SQLite lives in the persistent volume `memdock-data`. For a Tailnet deployment, use `tailscale serve` to expose the local port as trusted HTTPS; do not publish the default HTTP port to the public internet.
 
-Secure 可由可信反向代理终止 TLS：确保网络层仅代理可访问后端，设置 `MEMDOCK_MODE=secure`、读/写 token、公钥、项目 ACL 文件、`MEMDOCK_TRUST_PROXY_TLS=true` 及代理实际源地址对应的 `MEMDOCK_TRUST_PROXY_CIDRS`。任意来源即使伪造 `X-Forwarded-Proto: https` 也会因源 IP 不可信而拒绝；可信代理须覆盖客户端提交的转发头。也可设置证书/key 让服务直接 TLS；Compose 将 `${MEMDOCK_TLS_DIR:-./certs}` 只读挂载到 `/certs`，`.env` 设置 `MEMDOCK_TLS_CERT=/certs/fullchain.pem` 与 `MEMDOCK_TLS_KEY=/certs/privkey.pem`。证书和私钥须允许容器 UID 10001 读取且不能被 Agent 修改。Compose 默认只绑定 localhost，切勿为方便把后端端口直接公开。
+### TLS options for Secure mode
 
-Secure 身份配置需由部署操作者完成：
+Secure can terminate TLS at a trusted reverse proxy: ensure the network only lets the proxy reach the backend, set `MEMDOCK_MODE=secure`, the read/write tokens, the public key, the project ACL file, `MEMDOCK_TRUST_PROXY_TLS=true`, and `MEMDOCK_TRUST_PROXY_CIDRS` matching the proxy's actual source addresses. Any source that spoofs `X-Forwarded-Proto: https` is still rejected because its source IP is untrusted; a trusted proxy must override the forwarding headers submitted by clients. Alternatively, provide a certificate/key so the service serves TLS itself: Compose mounts `${MEMDOCK_TLS_DIR:-./certs}` read-only at `/certs`, and `.env` sets `MEMDOCK_TLS_CERT=/certs/fullchain.pem` and `MEMDOCK_TLS_KEY=/certs/privkey.pem`. The certificate and private key must be readable by container UID 10001 and not modifiable by the Agent.
 
-1. 以**不同于 Agent 的操作系统账户**运行 `memdock-server keygen /secure/path/approval.key`；保存其输出的 Ed25519 公钥到服务端 `MEMDOCK_APPROVAL_PUBLIC_KEY`。私钥仅留在审批者账户，工具创建时设为 `0600`。
-2. 分别生成至少 32 字节随机的 `MEMDOCK_READ_TOKEN`、`MEMDOCK_WRITE_TOKEN`，二者必须不同；另生成独立 Admin token。为每个 token 计算 SHA-256，并在 `config/project-acl.json` 中授予明确 role、project ID 与 shared 权限。ACL 文件设为 `0600`；Secure Compose 只读挂载 `./config` 并读取 `/config/project-acl.json`。`.env` 设置 `MEMDOCK_MODE=secure`、读/写 token、公钥及 TLS 配置，或设置可信代理 CIDR。Secure 不使用 Private 模式的 HMAC `MEMDOCK_APPROVAL_KEY`。Agent 只持有其 `read` token；Admin token 不交 Agent。不得允许 Agent 访问 Docker daemon 或含凭据的部署文件。
-3. Web、Secure 写入 Skill 脚本和 MCP 写工具生成审批请求 JSON，不直接写入。Agent 通过可信渠道将文件交给审批者；审批者在自己的交互终端执行：
+### Secure identity setup (performed by the deployment operator)
+
+1. Run `memdock-server keygen /secure/path/approval.key` under an **OS account different from the Agent's**; save the Ed25519 public key it prints into the server's `MEMDOCK_APPROVAL_PUBLIC_KEY`. Keep the private key only in the approver's account, created with `0600`.
+2. Generate `MEMDOCK_READ_TOKEN` and `MEMDOCK_WRITE_TOKEN`, each at least 32 random bytes and different from each other; generate a separate Admin token. Compute the SHA-256 of each token and grant explicit role, project IDs, and shared permissions in `config/project-acl.json`. Set the ACL file to `0600`; Secure Compose mounts `./config` read-only and reads `/config/project-acl.json`. `.env` sets `MEMDOCK_MODE=secure`, the read/write tokens, the public key, and TLS settings, or the trusted-proxy CIDRs. Secure does not use Private mode's HMAC `MEMDOCK_APPROVAL_KEY`. The Agent holds only its `read` token; the Admin token is never given to the Agent. Never allow the Agent to access the Docker daemon or deployment files containing credentials.
+3. Web, the Secure write skill script, and MCP write tools generate approval request JSON instead of writing directly. The Agent hands the file to the approver over a trusted channel; the approver runs in their own interactive terminal:
 
 ```sh
 MEMDOCK_URL=https://memdock.example \
-MEMDOCK_WRITE_TOKEN='审批者专用写 token' \
+MEMDOCK_WRITE_TOKEN='approver-only write token' \
 MEMDOCK_APPROVAL_PRIVATE_KEY_FILE=/secure/path/approval.key \
 ./memdock-server approve-request request.json
 ```
 
-CLI 显示将要提交的完整 JSON（终端控制/双向文本已转义），必须在终端输入 `approve` 才会发送一次性请求。签名绑定 HTTP 方法、路径和正文，约一分钟有效且服务端拒绝重放；REST 最终写入还会校验审批 token 对目标项目/知识库的 ACL。新项目由 Admin 建立，并将项目加入授权 grant 后重启服务。执行 Admin 操作时设置 `MEMDOCK_APPROVER_TOKEN='Admin token'`（会覆盖写 token）。不要把私钥、任何审批 token 或审批者终端交给 Agent。
+The CLI displays the full JSON to be submitted (terminal control/bidirectional text is escaped) and requires typing `approve` in the terminal before sending a one-time request. The signature binds the HTTP method, path, and body, is valid for about one minute, and the server rejects replays; the final REST write also checks the approval token's ACL scope on the target project/knowledge base. New projects are created by the Admin and added to an authorized grant, then the service is restarted. For Admin operations, set `MEMDOCK_APPROVER_TOKEN='Admin token'` (it overrides the write token). Never hand the private key, any approval token, or the approver's terminal to the Agent.
 
-Secure Web 会下载审批请求文件；Secure `mem-save` 在用户明确触发后生成 `0600` 请求文件，有 TTY 时还会要求输入 `y`，无 TTY 时仅生成待独立审批的请求；mem-update/delete/kb-create/project-rename 脚本在交互确认后写出请求文件；MCP 写工具返回结构化 `approval_request`。请求文件须经可信渠道交给独立审批者。文件生成本身不代表获批或保存成功。
+Secure Web downloads approval request files; Secure `mem-save` generates a `0600` request file after the user explicitly triggers it, and also asks for `y` when a TTY is present — without a TTY it only produces a request pending independent approval; the mem-update/delete/kb-create/project-rename scripts write request files after interactive confirmation; MCP write tools return a structured `approval_request`. Request files must be handed to an independent approver over a trusted channel. Generating a file does not mean it was approved or saved.
 
 ```json
-{"project_id":"项目ID","title":"用户确认的标题","content":"用户确认的内容"}
+{"project_id":"PROJECT_ID","title":"user-confirmed title","content":"user-confirmed content"}
 ```
 
-如需新建项目/绑定仓库，由 Admin 准备 `{"method":"POST","path":"/api/v1/projects/resolve","body":{"name":"项目名","repository":"https://example/repo.git"}}`，设置 `MEMDOCK_APPROVER_TOKEN` 后执行 `approve-request project.json`；随后把新项目 ID 加到所需身份 grant 并重启服务。Agent 在 ACL 更新前不能访问新项目。
+To create a new project/bind a repository, the Admin prepares `{"method":"POST","path":"/api/v1/projects/resolve","body":{"name":"project name","repository":"https://example/repo.git"}}`, sets `MEMDOCK_APPROVER_TOKEN`, and runs `approve-request project.json`; then add the new project ID to the needed identity grants and restart the service. Agents cannot access the new project before the ACL is updated.
 
 ## Agent Skills
 
-`skills/mem-save` 和 `skills/mem-search` 含 Codex/Pi 可识别的 Skill 元数据。Pi 可通过 `pi --skill /path/to/memdock/skills/mem-search/SKILL.md`（或 `mem-save/SKILL.md`）加载。Codex CLI 从 `$CODEX_HOME/skills` 加载 Skill，默认目录为 `~/.codex/skills`；可链接本仓库的 Skill 目录：
+`skills/mem-save` and `skills/mem-search` carry skill metadata recognized by Codex/Pi. Pi loads them via `pi --skill /path/to/memdock/skills/mem-search/SKILL.md` (or `mem-save/SKILL.md`). The Codex CLI loads skills from `$CODEX_HOME/skills`, default `~/.codex/skills`; symlink this repository's skill directories:
 
 ```sh
 codex_skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
@@ -98,29 +122,29 @@ ln -s /path/to/memdock/skills/mem-search "$codex_skills_dir/mem-search"
 ln -s /path/to/memdock/skills/mem-save "$codex_skills_dir/mem-save"
 ```
 
-## API 与客户端
+## API & Clients
 
-健康检查：`GET /healthz`；管理界面：`/`；MCP：`/mcp`。Secure 模式写操作只可由独立审批 CLI 发起；Agent 常规客户端只持有读 token。Agent 读脚本可用 `MEMDOCK_READ_TOKEN` 环境变量；MCP 客户端需为 `/mcp` 请求配置相同的 Bearer token。Private 模式的脚本仍使用 HMAC，但不能满足严格授权。运行时的身份分离依赖部署账户、文件权限、终端及 Docker daemon 权限，需分别验收。
+Health check: `GET /healthz`; management UI: `/`; MCP: `/mcp`. In Secure mode, write operations may only be initiated by the independent approval CLI; regular Agent clients hold only the read token. Agent read scripts can use the `MEMDOCK_READ_TOKEN` environment variable; MCP clients must configure the same Bearer token for `/mcp` requests. In Private mode the scripts still use HMAC, which does not provide strict authorization. Runtime identity separation depends on deployment accounts, file permissions, terminals, and Docker daemon permissions, and must be accepted separately.
 
-## SQLite 备份与恢复
+## SQLite Backup & Restore
 
-Admin 身份可下载一致性快照：`GET /api/v1/backup`。使用 HTTPS 和 Admin Bearer token（或浏览器 Basic）保存响应文件；端点使用 SQLite `VACUUM INTO` 创建独立快照并执行 `integrity_check` 后才返回。
+With an Admin identity, a consistent snapshot can be downloaded: `GET /api/v1/backup`. Save the response file using HTTPS and the Admin Bearer token (or browser Basic auth); the endpoint creates a standalone snapshot with SQLite `VACUUM INTO` and runs `integrity_check` before returning it.
 
-恢复前先通过一致性备份 API 保存完整快照，再停服保留原数据库目录（含可能存在的 WAL/SHM sidecar）：
+Before restoring, save a full snapshot via the backup API, then stop the service and preserve the original database directory (including any WAL/SHM sidecars):
 
 ```sh
 curl --fail --cacert trusted-ca.pem -H "Authorization: Bearer $MEMDOCK_READ_TOKEN" \
   https://memdock.example/api/v1/backup -o ./before-restore.sqlite
 docker compose stop memdock
 docker compose cp memdock:/data ./before-restore-data
-# 将待恢复备份放入可由容器访问的路径，执行：
+# Put the backup to restore somewhere the container can read, then:
 docker compose run --rm -v "$PWD:/restore:ro" memdock restore /restore/backup.sqlite /data/memdock.db
 docker compose up -d memdock
 ```
 
-`restore` 在目标目录的 0700 暂存目录中对来源数据库执行 `VACUUM INTO`，校验 SQLite 完整性、MemDock 表/列/索引/触发器及受支持的 schema 版本后再安装。它要求服务已停止；旧主库、`-wal`、`-shm` 先移至同目录保留文件，安装失败则回滚，成功后清理旧文件，因此不会把旧 WAL 应用到新主库。恢复后检查容器健康、项目/记忆数据和日志；备份文件须按敏感数据加密保存并定期进行实际恢复演练。Compose 命令是否能按具体 Docker Compose 版本访问命名卷应在部署环境先确认；也可在宿主机直接调用同一镜像并挂载数据卷。
+`restore` runs `VACUUM INTO` on the source database inside a `0700` staging directory in the target directory, validates SQLite integrity, MemDock tables/columns/indexes/triggers, and the supported schema version before installing. It requires the service to be stopped; the old main database, `-wal`, and `-shm` files are first moved aside in the same directory, installation failure rolls back, and success cleans up the old files, so an old WAL is never applied to a new main database. After restoring, check container health, project/memory data, and logs; backup files must be stored encrypted as sensitive data and restore drills must be performed regularly. Whether the Compose commands can access the named volume with a given Docker Compose version should be confirmed in the deployment environment; the same image can also be invoked on the host with the data volume mounted directly.
 
-## 验证
+## Verification
 
 ```sh
 go test ./...
@@ -129,10 +153,10 @@ go build ./cmd/server
 git diff --check
 ```
 
-AMD64/ARM64 镜像构建可用：
+AMD64/ARM64 image builds are available via:
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 -t memdock:local .
 ```
 
-本仓库阶段四验证环境、未覆盖项和安全授权阻塞记录在 `docs/tasks/04-部署安全与交付.md` 与 `docs/待确认问题.md`。镜像构建、Tailscale 多设备、代理 TLS、备份恢复生产演练及用户验收未验证前，不视为部署验收通过。
+Stage 4 verification environment, uncovered items, and security authorization blockers for this repository are recorded in `docs/tasks/04-部署安全与交付.md` and `docs/待确认问题.md`. Image builds, Tailscale multi-device, proxy TLS, backup/restore production drills, and user acceptance are not considered deployment-accepted until verified.
