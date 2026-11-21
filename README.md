@@ -45,14 +45,20 @@ Secure Web/Skill/MCP 审批文件链路提供可执行请求生成及独立 CLI 
 
 ## Docker / Compose
 
+仓库提供 [.env.example](.env.example) 和 [ACL 示例](config/project-acl.example.json)。Compose 会自动读取根目录的 `.env`；复制示例并填写实际值，切勿提交凭据。Private 模式不需要 ACL 文件。
+
 ```sh
 # Private 模式示例：生成仅本机可读的 HMAC 配置；妥善保管并勿提交。
 umask 077
-printf 'MEMDOCK_MODE=private\nMEMDOCK_APPROVAL_KEY=%s\n' "$(openssl rand -hex 32)" > .env
+cp .env.example .env
+# 编辑 .env，将 MEMDOCK_APPROVAL_KEY 设为以下命令生成的值：
+openssl rand -hex 32
 docker compose up -d --build
 docker compose ps
 docker compose logs -f memdock
 ```
+
+Secure 模式还需复制 `config/project-acl.example.json` 为 `config/project-acl.json`，替换其中的摘要和项目 ID，并按下方步骤完成 token、公钥及 TLS 配置。示例中的占位符不能直接用于启动。直接使用 `docker run --env-file .env` 时，文件中的服务端环境变量会传入容器；Compose 专用的端口及挂载目录变量仍需通过 `-p`、`-v` 等参数单独配置。
 
 默认仅发布到宿主机 `127.0.0.1:8080`，容器以 UID/GID 10001 非 root 运行，SQLite 位于持久卷 `memdock-data`。部署到 Tailnet 可使用 `tailscale serve` 将本机端口以受信任 HTTPS 暴露；不要直接将默认 HTTP 端口发布到公网。
 

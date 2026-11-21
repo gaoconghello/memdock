@@ -1,5 +1,6 @@
 memdock.db
 .env
+/config/project-acl.json
 /certs/
 memdock.db-shm
 memdock.db-wal
