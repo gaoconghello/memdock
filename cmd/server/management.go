@@ -587,6 +587,111 @@ func (a *app) updateMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]string{"id": id, "updated_at": now})
 }
+func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
+	if !a.verifyWriteSignature(w, r) {
+		return
+	}
+	var req struct {
+		ProjectID       string `json:"project_id"`
+		TargetProjectID string `json:"target_project_id"`
+		KnowledgeBaseID string `json:"knowledge_base_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.ProjectID == "" || req.TargetProjectID == "" || req.KnowledgeBaseID == "" {
+		writeError(w, 400, "project_id, target_project_id and knowledge_base_id are required")
+		return
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer tx.Rollback()
+	id := r.PathValue("id")
+	var sourceKind, sourceOwner, currentKB string
+	err = tx.QueryRowContext(r.Context(), `SELECT k.kind,coalesce(k.project_id,''),m.knowledge_base_id FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.id=?`, id).Scan(&sourceKind, &sourceOwner, &currentKB)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "memory not found for project")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	if sourceKind == "shared" {
+		var sourceProjectExists int
+		err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, req.ProjectID).Scan(&sourceProjectExists)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, 404, "project not found")
+			return
+		}
+		if err != nil {
+			writeError(w, 500, "database error")
+			return
+		}
+	} else if sourceKind != "project" || sourceOwner != req.ProjectID {
+		writeError(w, 404, "memory not found for project")
+		return
+	}
+	if grant, ok := grantFromRequest(r); ok {
+		if !grant.canProject(req.ProjectID, true) || sourceKind == "shared" && !grant.canShared(true) {
+			writeError(w, http.StatusForbidden, "identity is not authorized for this project or library")
+			return
+		}
+		if !grant.canProject(req.TargetProjectID, true) {
+			writeError(w, http.StatusForbidden, "identity is not authorized for this project or library")
+			return
+		}
+	}
+	var projectExists int
+	if err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, req.TargetProjectID).Scan(&projectExists); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "target project not found")
+		return
+	} else if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	var targetOwner, targetKind string
+	err = tx.QueryRowContext(r.Context(), `SELECT coalesce(project_id,''),kind FROM knowledge_bases WHERE id=?`, req.KnowledgeBaseID).Scan(&targetOwner, &targetKind)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "target knowledge base not found")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	if targetKind != "project" || targetOwner != req.TargetProjectID {
+		writeError(w, 400, "target knowledge base must belong to target project")
+		return
+	}
+	if currentKB == req.KnowledgeBaseID {
+		writeJSON(w, 200, map[string]string{"id": id, "knowledge_base_id": currentKB})
+		return
+	}
+	if err = saveRevision(tx, id); err != nil {
+		writeError(w, 404, "memory not found")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := tx.ExecContext(r.Context(), `UPDATE memories SET knowledge_base_id=?,updated_at=? WHERE id=? AND knowledge_base_id=?`, req.KnowledgeBaseID, now, id, currentKB)
+	if err != nil {
+		writeError(w, 500, "could not move memory")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		writeError(w, 409, "memory location changed; retry the move")
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	writeJSON(w, 200, map[string]string{"id": id, "knowledge_base_id": req.KnowledgeBaseID, "updated_at": now})
+}
+
 func (a *app) deleteMemory(w http.ResponseWriter, r *http.Request) {
 	a.setMemoryStatus(w, r, "deleted")
 }

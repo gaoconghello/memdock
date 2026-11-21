@@ -208,6 +208,61 @@ func TestSecureWriteRequiresWriteCredentialAndIndependentApproval(t *testing.T) 
 	}
 }
 
+func TestSecureApprovedMemoryMoveThroughHTTPAuthorization(t *testing.T) {
+	t.Setenv("MEMDOCK_TRUST_PROXY_TLS", "true")
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "secure-memory-move.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects(id,name,created_at) VALUES('p1','source','now'),('p2','target','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO knowledge_bases(id,project_id,name,kind,is_default,created_at) VALUES('kb-p1','p1','source','project',1,'now'),('kb-p2','p2','target','project',1,'now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('move-secure','kb-p1','secure title','secure body','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	pub, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeToken := strings.Repeat("m", 32)
+	networks, err := parseTrustedProxyCIDRs("10.30.0.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{db: db, mode: "secure", approvalPublicKey: pub, trustedProxyCIDRs: networks, projectGrants: map[string]accessGrant{
+		tokenDigest(writeToken): {Role: "write", Projects: []string{"p1", "p2"}},
+	}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/memories/{id}/move", a.moveMemory)
+	handler := a.authenticate(a.authorizeProjectAccess(mux))
+	body := `{"project_id":"p1","target_project_id":"p2","knowledge_base_id":"kb-p2"}`
+	timestamp, nonce := strconv.FormatInt(time.Now().Unix(), 10), strings.Repeat("d", 32)
+	message := timestamp + "\n" + nonce + "\nPOST\n/api/v1/memories/move-secure/move\n" + body
+	signature := "approval:" + timestamp + ":" + nonce + ":" + hex.EncodeToString(ed25519.Sign(privateKey, []byte(message)))
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/memories/move-secure/move", strings.NewReader(body))
+	r.RemoteAddr = "10.30.0.5:443"
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("Authorization", "Bearer "+writeToken)
+	r.Header.Set("X-MemDock-Write-Signature", signature)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approved move status=%d body=%s", w.Code, w.Body)
+	}
+	var kb string
+	if err := db.QueryRow(`SELECT knowledge_base_id FROM memories WHERE id='move-secure'`).Scan(&kb); err != nil || kb != "kb-p2" {
+		t.Fatalf("approved move knowledge_base_id=%q err=%v", kb, err)
+	}
+}
+
 func TestSecureProjectResolveRequiresIndependentApproval(t *testing.T) {
 	t.Setenv("MEMDOCK_TRUST_PROXY_TLS", "false")
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "resolve.sqlite"))

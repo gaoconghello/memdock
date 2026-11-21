@@ -161,6 +161,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/memories", a.listMemories)
 	mux.HandleFunc("GET /api/v1/memories/{id}", a.getMemory)
 	mux.HandleFunc("PATCH /api/v1/memories/{id}", a.updateMemory)
+	mux.HandleFunc("POST /api/v1/memories/{id}/move", a.moveMemory)
 	mux.HandleFunc("DELETE /api/v1/memories/{id}", a.deleteMemory)
 	mux.HandleFunc("POST /api/v1/memories/{id}/restore", a.restoreMemory)
 	mux.HandleFunc("DELETE /api/v1/memories/{id}/permanent", a.permanentlyDeleteMemory)

@@ -168,6 +168,61 @@ func TestMemoryLifecycleTagsHistoryAndSearchIndex(t *testing.T) {
 	}
 }
 
+func TestMoveMemoryPreservesDataAndHistory(t *testing.T) {
+	a := managementApp(t)
+	source := createManagementProject(t, a, "move-source")
+	target := createManagementProject(t, a, "move-target")
+	var sourceKB, targetKB string
+	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, source).Scan(&sourceKB); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, target).Scan(&targetKB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,category,status,created_at,updated_at) VALUES('move-me',?,'title','body','category','active','created','updated')`, sourceKB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec(`INSERT INTO memory_tags(memory_id,tag) VALUES('move-me','tag')`); err != nil {
+		t.Fatal(err)
+	}
+	moved := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`","knowledge_base_id":"`+targetKB+`"}`, a.moveMemory, true)
+	if moved.Code != http.StatusOK {
+		t.Fatalf("move status=%d body=%s", moved.Code, moved.Body)
+	}
+	var gotKB, title, content, category, status string
+	var tags, revisions int
+	if err := a.db.QueryRow(`SELECT knowledge_base_id,title,content,category,status FROM memories WHERE id='move-me'`).Scan(&gotKB, &title, &content, &category, &status); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.db.QueryRow(`SELECT count(*) FROM memory_tags WHERE memory_id='move-me' AND tag='tag'`).Scan(&tags)
+	_ = a.db.QueryRow(`SELECT count(*) FROM memory_revisions WHERE memory_id='move-me'`).Scan(&revisions)
+	if gotKB != targetKB || title != "title" || content != "body" || category != "category" || status != "active" || tags != 1 || revisions != 1 {
+		t.Fatalf("move lost or changed data: kb=%s title=%s content=%s category=%s status=%s tags=%d revisions=%d", gotKB, title, content, category, status, tags, revisions)
+	}
+	oldList := httptest.NewRecorder()
+	a.listMemories(oldList, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+source, nil))
+	newList := httptest.NewRecorder()
+	a.listMemories(newList, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+target, nil))
+	if strings.Contains(oldList.Body.String(), "move-me") || !strings.Contains(newList.Body.String(), "move-me") {
+		t.Fatalf("memory list ownership incorrect: source=%s target=%s", oldList.Body, newList.Body)
+	}
+	searchSource := httptest.NewRecorder()
+	a.searchMemories(searchSource, httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", strings.NewReader(`{"project_id":"`+source+`","query":"body"}`)))
+	searchTarget := httptest.NewRecorder()
+	a.searchMemories(searchTarget, httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", strings.NewReader(`{"project_id":"`+target+`","query":"body"}`)))
+	if strings.Contains(searchSource.Body.String(), "move-me") || !strings.Contains(searchTarget.Body.String(), "move-me") {
+		t.Fatalf("memory search ownership incorrect: source=%s target=%s", searchSource.Body, searchTarget.Body)
+	}
+	wrongSource := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`","knowledge_base_id":"`+targetKB+`"}`, a.moveMemory, true)
+	if wrongSource.Code != http.StatusNotFound {
+		t.Fatalf("wrong source project status=%d body=%s", wrongSource.Code, wrongSource.Body)
+	}
+	invalid := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+target+`","target_project_id":"`+source+`","knowledge_base_id":"`+targetKB+`"}`, a.moveMemory, true)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("foreign target KB status=%d body=%s", invalid.Code, invalid.Body)
+	}
+}
+
 func TestProjectRepositoryAndKnowledgeBaseManagement(t *testing.T) {
 	a := managementApp(t)
 	project := createManagementProject(t, a, "unbound")

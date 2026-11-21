@@ -333,23 +333,32 @@ func (a *app) authorizeMemory(w http.ResponseWriter, r *http.Request, grant acce
 		return denyAccess(w)
 	}
 	projectID := r.URL.Query().Get("project_id")
+	var targetProjectID, targetKBID string
 	if r.Method != http.MethodGet {
 		var input struct {
-			ProjectID string `json:"project_id"`
+			ProjectID       string `json:"project_id"`
+			TargetProjectID string `json:"target_project_id"`
+			KnowledgeBaseID string `json:"knowledge_base_id"`
 		}
 		if !readRequestJSON(w, r, &input) {
 			return false
 		}
 		projectID = input.ProjectID
+		targetProjectID, targetKBID = input.TargetProjectID, input.KnowledgeBaseID
 	}
 	if kind == "shared" {
 		if projectID == "" || !grant.canProject(projectID, write) || !grant.canShared(write) {
 			return denyAccess(w)
 		}
-		return true
-	}
-	if projectID != owner || !grant.canProject(owner, write) {
+	} else if projectID != owner || !grant.canProject(owner, write) {
 		return denyAccess(w)
+	}
+	if strings.HasSuffix(r.URL.Path, "/move") {
+		var targetOwner, targetKind string
+		if targetProjectID == "" || targetKBID == "" || !grant.canProject(targetProjectID, true) ||
+			a.db.QueryRowContext(r.Context(), `SELECT coalesce(project_id,''),kind FROM knowledge_bases WHERE id=?`, targetKBID).Scan(&targetOwner, &targetKind) != nil || targetKind != "project" || targetOwner != targetProjectID {
+			return denyAccess(w)
+		}
 	}
 	return true
 }

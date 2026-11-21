@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MemDock · Coding Agent 共享长期记忆</title>
+<script>
+(function(){
+  try {
+    let saved = localStorage.getItem('memdock-theme');
+    let theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch(e){}
+})();
+</script>
 <style>
 :root {
   --bg-page: #0b0f17;
@@ -22,12 +31,46 @@
   --danger: #f43f5e;
   --danger-soft: rgba(244, 63, 94, 0.12);
   --danger-hover: #e11d48;
+  --header-bg: rgba(11, 15, 23, 0.85);
+  --editor-bg: linear-gradient(180deg, #131c2e 0%, var(--bg-surface) 100%);
+  --code-bg: rgba(0, 0, 0, 0.25);
+  --input-focus-bg: #1e283d;
+  --meta-badge-bg: rgba(255, 255, 255, 0.05);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
   --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--border-subtle);
+  --radial-top: rgba(16, 185, 129, 0.08);
+  --radial-bottom: rgba(30, 41, 59, 0.3);
+}
+
+[data-theme="light"] {
+  --bg-page: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #f1f5f9;
+  --bg-surface-hover: #e2e8f0;
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --border-focus: #059669;
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #64748b;
+  --accent: #059669;
+  --accent-soft: rgba(5, 150, 105, 0.1);
+  --accent-hover: #047857;
+  --danger: #e11d48;
+  --danger-soft: rgba(225, 29, 72, 0.08);
+  --danger-hover: #be123c;
+  --header-bg: rgba(255, 255, 255, 0.9);
+  --editor-bg: linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%);
+  --code-bg: #f8fafc;
+  --input-focus-bg: #ffffff;
+  --meta-badge-bg: #f1f5f9;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 0 0 1px var(--border-subtle);
+  --radial-top: rgba(16, 185, 129, 0.06);
+  --radial-bottom: rgba(226, 232, 240, 0.6);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -38,22 +81,24 @@ body {
   color: var(--text-main);
   background-color: var(--bg-page);
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(16, 185, 129, 0.08), transparent 70%),
-    radial-gradient(circle at 100% 100%, rgba(30, 41, 59, 0.3), transparent 40%);
+    radial-gradient(ellipse 80% 50% at 50% -20%, var(--radial-top), transparent 70%),
+    radial-gradient(circle at 100% 100%, var(--radial-bottom), transparent 40%);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Header */
 header {
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(11, 15, 23, 0.85);
+  background: var(--header-bg);
   backdrop-filter: blur(12px);
   position: sticky;
   top: 0;
   z-index: 50;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 .header-inner {
   max-width: 1360px;
@@ -222,7 +267,7 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus {
   border-color: var(--border-focus);
-  background: #1e283d;
+  background: var(--input-focus-bg);
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
 }
 input::placeholder, textarea::placeholder {
@@ -270,7 +315,7 @@ button {
 button:hover {
   background: var(--bg-surface-hover);
   border-color: var(--border-strong);
-  color: #fff;
+  color: var(--text-main);
 }
 button:active {
   transform: translateY(1px);
@@ -278,18 +323,18 @@ button:active {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #04271c;
+  color: #ffffff;
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25);
 }
 button.primary:hover {
-  background: #34d399;
-  border-color: #34d399;
-  color: #032017;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #ffffff;
 }
 button.danger {
-  color: #fda4af;
-  background: rgba(244, 63, 94, 0.08);
+  color: var(--danger);
+  background: var(--danger-soft);
   border-color: rgba(244, 63, 94, 0.2);
 }
 button.danger:hover {
@@ -341,8 +386,8 @@ details.settings[open] > .stack {
 
 /* Editor Panel */
 .editor {
-  background: linear-gradient(180deg, #131c2e 0%, var(--bg-surface) 100%);
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  background: var(--editor-bg);
+  border: 1px solid rgba(16, 185, 129, 0.25);
   border-radius: var(--radius-lg);
   padding: 20px;
 }
@@ -361,7 +406,7 @@ details.settings[open] > .stack {
   gap: 10px;
   font-size: 15px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-main);
 }
 .editor-header-title svg {
   color: var(--accent);
@@ -445,7 +490,7 @@ details.settings[open] > .stack {
 }
 .memory-item:hover {
   border-color: var(--border-strong);
-  background: #1c263a;
+  background: var(--bg-surface-hover);
   transform: translateY(-1px);
 }
 .memory-head {
@@ -463,17 +508,18 @@ details.settings[open] > .stack {
 .memory-title {
   font-size: 14.5px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-main);
 }
 .memory-content {
-  color: #cbd5e1;
+  color: var(--text-main);
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--code-bg);
   padding: 10px 12px;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent);
   font-family: var(--font-mono);
 }
@@ -496,7 +542,7 @@ details.settings[open] > .stack {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--meta-badge-bg);
   border: 1px solid var(--border-subtle);
   padding: 1px 7px;
   border-radius: 4px;
@@ -515,12 +561,13 @@ details.settings[open] > .stack {
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--accent-soft);
-  color: #34d399;
+  color: var(--accent);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 .pill:empty { display: none; }
+.hidden { display: none !important; }
 
 .empty-state {
   text-align: center;
@@ -541,7 +588,7 @@ details.settings[open] > .stack {
 /* System Card */
 .system-card {
   margin-top: 12px;
-  background: rgba(17, 24, 39, 0.6);
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
 }
 .system-grid {
@@ -593,6 +640,22 @@ details.settings[open] > .stack {
     </a>
     <div class="header-actions">
       <span id="health" role="status">状态读取中…</span>
+      <button id="theme-toggle" class="icon-only" title="切换亮色/暗色主题" aria-label="切换亮色/暗色主题">
+        <svg id="theme-icon-sun" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+        <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </button>
     </div>
   </div>
 </header>
@@ -811,10 +874,10 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function project(){return state.project}
 async function init(){let secure=window.isSecureContext&&!!window.crypto?.subtle;$('#write-security').textContent=secure?'写入签名可用（安全上下文）。非 localhost 部署请使用可信 HTTPS；HMAC 不等于用户身份认证。':'非安全上下文：写入已禁用且不会提示输入密钥。当前页面数据仍可能经 HTTP 明文传输；非 localhost 访问请使用可信 HTTPS，或仅通过可信且加密的内网访问。';let status=await api('/api/v1/status');state.mode=status.mode;if(status.mode==='secure')$('#write-security').textContent='Secure 模式：写操作仅导出审批请求文件，不会直接写入；交由独立审批者运行 approve-request CLI。';let h=$('#health');h.textContent=status.status==='ok'?'服务正常':'服务异常';h.setAttribute('data-state',status.status==='ok'?'ok':'error');$('#sys').textContent=`v${status.version} · SQLite (${status.database}) · ${status.mode} 模式${status.counts_visible?' · '+status.projects+' 个项目 · '+status.memories+' 条有效记忆':''}`;let p=await api('/api/v1/projects');state.projects=p.projects;$('#projects').innerHTML=state.projects.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');if(!state.project)state.project=state.projects[0]?.id||'';$('#projects').value=state.project;await loadProject()}
 async function loadProject(){state.project=$('#projects').value; if(!project()){ $('#project-meta').textContent='暂无项目，请先通过 Agent 项目初始化流程创建项目。';$('#kb').innerHTML='';$('#memories').innerHTML='<li class="empty-state"><p>暂无选中的项目</p></li>';return}let [p,k]=await Promise.all([api('/api/v1/projects/'+encodeURIComponent(project())),api('/api/v1/knowledge-bases')]);$('#project-meta').textContent=`ID: ${p.id} · 仓库: ${p.repositories?.join(', ')||'未关联 Git 仓库'}`;state.kbs=k.knowledge_bases.filter(x=>x.kind==='shared'||x.project_id===project());$('#kb').innerHTML='<option value="">项目与共享库（默认）</option>'+state.kbs.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} · ${x.kind==='shared'?'共享':'项目'}${x.is_default?'（默认）':''}</option>`).join('');await list()}
-async function list(query=''){if(!project())return;let url='/api/v1/memories?project_id='+encodeURIComponent(project())+'&status='+encodeURIComponent($('#mem-status').value);if($('#kb').value)url+='&knowledge_base_id='+encodeURIComponent($('#kb').value);if($('#tag-filter').value)url+='&tag='+encodeURIComponent($('#tag-filter').value);let payload={project_id:project(),query,tag:$('#tag-filter').value};if($('#kb').value)payload.knowledge_base_id=$('#kb').value;let d=query&&query!=='__selected'&&$('#mem-status').value==='active'?await api('/api/v1/memories/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await api(url);let items=d.results||d.memories||[];if(query&&query!=='__selected'&&$('#mem-status').value==='deleted'){let q=query.toLocaleLowerCase();items=items.filter(m=>(m.title+' '+m.content).toLocaleLowerCase().includes(q))}$('#count').textContent=`（共 ${items.length} 条）`;$('#memories').innerHTML=items.map(m=>`<li class="memory-item"><div class="memory-head"><div class="memory-title-wrap"><span class="memory-title">${esc(m.title)}</span>${m.category?`<span class="pill">${esc(m.category)}</span>`:''}</div><div class="memory-actions"><button data-edit="${esc(m.id)}">编辑</button>${m.status==='deleted'?`<button data-restore="${esc(m.id)}">恢复</button>`:`<button class="danger" data-delete="${esc(m.id)}">删除</button>`}</div></div><div class="memory-content">${esc(m.content)}</div><div class="memory-meta"><div class="meta-info"><span class="meta-badge">${esc(m.knowledge_base_name||m.knowledge_base_id)}（${esc(m.knowledge_base_type||'')}）</span>${(m.tags||[]).length>0?`<span class="meta-badge"># ${esc((m.tags||[]).join(', '))}</span>`:''}</div><span>更新于 ${esc(m.updated_at||'')}</span></div></li>`).join('')||`<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg><p>没有匹配的记忆条目</p></li>`;}
+async function list(query=''){if(!project())return;let url='/api/v1/memories?project_id='+encodeURIComponent(project())+'&status='+encodeURIComponent($('#mem-status').value);if($('#kb').value)url+='&knowledge_base_id='+encodeURIComponent($('#kb').value);if($('#tag-filter').value)url+='&tag='+encodeURIComponent($('#tag-filter').value);let payload={project_id:project(),query,tag:$('#tag-filter').value};if($('#kb').value)payload.knowledge_base_id=$('#kb').value;let d=query&&query!=='__selected'&&$('#mem-status').value==='active'?await api('/api/v1/memories/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}):await api(url);let items=d.results||d.memories||[];if(query&&query!=='__selected'&&$('#mem-status').value==='deleted'){let q=query.toLocaleLowerCase();items=items.filter(m=>(m.title+' '+m.content).toLocaleLowerCase().includes(q))}$('#count').textContent=`（共 ${items.length} 条）`;$('#memories').innerHTML=items.map(m=>`<li class="memory-item"><div class="memory-head"><div class="memory-title-wrap"><span class="memory-title">${esc(m.title)}</span>${m.category?`<span class="pill">${esc(m.category)}</span>`:''}</div><div class="memory-actions"><button data-edit="${esc(m.id)}">编辑</button><button data-move="${esc(m.id)}">移动</button>${m.status==='deleted'?`<button data-restore="${esc(m.id)}">恢复</button>`:`<button class="danger" data-delete="${esc(m.id)}">删除</button>`}</div></div><div class="memory-content">${esc(m.content)}</div><div class="memory-meta"><div class="meta-info"><span class="meta-badge">${esc(m.knowledge_base_name||m.knowledge_base_id)}（${esc(m.knowledge_base_type||'')}）</span>${(m.tags||[]).length>0?`<span class="meta-badge"># ${esc((m.tags||[]).join(', '))}</span>`:''}</div><span>更新于 ${esc(m.updated_at||'')}</span></div></li>`).join('')||`<li class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="8" y1="12" x2="16" y2="12"></line></svg><p>没有匹配的记忆条目</p></li>`;}
 $('#reload').onclick=()=>init().catch(alert);$('#projects').onchange=()=>loadProject().catch(alert);$('#search').onclick=()=>list($('#query').value.trim()).catch(alert);$('#all-memories').onclick=()=>{ $('#query').value=''; $('#tag-filter').value=''; list('__selected').catch(alert); };$('#mem-status').onchange=()=>list().catch(alert);$('#kb').onchange=()=>list('__selected').catch(alert);
 $('#save').onclick=async()=>{try{let obj={project_id:project(),title:$('#title').value,content:$('#content').value,category:$('#category').value,tags:$('#tags').value.split(',').map(x=>x.trim()).filter(Boolean)};if($('#select-kb').checked)obj.knowledge_base_id=$('#kb').value;await write('POST','/api/v1/memories',obj);$('#title').value=$('#content').value='';$('#category').value='';$('#tags').value='';await init()}catch(e){alert(e.message)}};
-$('#memories').onclick=async e=>{let id=e.target.dataset.edit||e.target.dataset.delete||e.target.dataset.restore;if(!id)return;try{if(e.target.dataset.edit){let m=await api('/api/v1/memories/'+encodeURIComponent(id)+'?project_id='+encodeURIComponent(project()));let title=prompt('标题',m.title),content=prompt('内容',m.content),tags=prompt('标签（逗号分隔，可留空清除）',(m.tags||[]).join(', '));if(title===null||content===null||tags===null)return;await write('PATCH','/api/v1/memories/'+encodeURIComponent(id),{project_id:project(),title,content,tags:tags.split(',').map(x=>x.trim()).filter(Boolean)})}else if(e.target.dataset.restore)await write('POST','/api/v1/memories/'+encodeURIComponent(id)+'/restore',{project_id:project()});else await write('DELETE','/api/v1/memories/'+encodeURIComponent(id),{project_id:project()});await list()}catch(err){alert(err.message)}};
+$('#memories').onclick=async e=>{let id=e.target.dataset.edit||e.target.dataset.move||e.target.dataset.delete||e.target.dataset.restore;if(!id)return;try{if(e.target.dataset.edit){let m=await api('/api/v1/memories/'+encodeURIComponent(id)+'?project_id='+encodeURIComponent(project()));let title=prompt('标题',m.title),content=prompt('内容',m.content),tags=prompt('标签（逗号分隔，可留空清除）',(m.tags||[]).join(', '));if(title===null||content===null||tags===null)return;await write('PATCH','/api/v1/memories/'+encodeURIComponent(id),{project_id:project(),title,content,tags:tags.split(',').map(x=>x.trim()).filter(Boolean)})}else if(e.target.dataset.move){let projects=state.projects.filter(x=>x.id!==project());if(!projects.length)throw Error('没有可移动到的其他项目');let pIndex=prompt('选择目标项目（输入序号）：\n'+projects.map((p,i)=>`${i+1}. ${p.name}`).join('\n'));if(pIndex===null)return;let target=projects[Number(pIndex)-1];if(!target)throw Error('目标项目序号无效');let data=await api('/api/v1/knowledge-bases'),bases=data.knowledge_bases.filter(x=>x.kind==='project'&&x.project_id===target.id);if(!bases.length)throw Error('目标项目没有可用知识库');let kbIndex=prompt(`选择「${target.name}」中的目标知识库（输入序号）：\n`+bases.map((kb,i)=>`${i+1}. ${kb.name}${kb.is_default?'（默认）':''}`).join('\n'));if(kbIndex===null)return;let kb=bases[Number(kbIndex)-1];if(!kb)throw Error('目标知识库序号无效');await write('POST','/api/v1/memories/'+encodeURIComponent(id)+'/move',{project_id:project(),target_project_id:target.id,knowledge_base_id:kb.id})}else if(e.target.dataset.restore)await write('POST','/api/v1/memories/'+encodeURIComponent(id)+'/restore',{project_id:project()});else await write('DELETE','/api/v1/memories/'+encodeURIComponent(id),{project_id:project()});await list()}catch(err){alert(err.message)}};
 $('#rename').onclick=async()=>{let name=prompt('项目名称');if(name)try{await write('PATCH','/api/v1/projects/'+encodeURIComponent(project()),{name});await init()}catch(e){alert(e.message)}};
 $('#bind').onclick=async()=>{let repository=$('#repository').value.trim();if(repository)try{await write('POST','/api/v1/projects/'+encodeURIComponent(project())+'/repositories',{repository});await loadProject()}catch(e){alert(e.message)}};
 $('#unbind').onclick=async()=>{let repository=$('#repository').value.trim();if(repository)try{await write('DELETE','/api/v1/projects/'+encodeURIComponent(project())+'/repositories',{repository});await loadProject()}catch(e){alert(e.message)}};
@@ -824,6 +887,10 @@ $('#delete-kb').onclick=async()=>{let id=$('#kb').value;if(!id)return alert('先
 $('#move-kb').onclick=async()=>{let id=$('#kb').value;if(!id)return alert('先选择知识库');let kind=$('#kb-target-kind').value;try{await write('PATCH','/api/v1/knowledge-bases/'+encodeURIComponent(id),{kind,...(kind==='project'?{project_id:project()}:{})});await loadProject()}catch(e){alert(e.message)}};
 $('#merge-project').onclick=async()=>{let target=prompt('输入目标项目 ID');if(target)try{await write('POST','/api/v1/projects/'+encodeURIComponent(project())+'/merge',{target_project_id:target,confirm:true});state.project=target;await init()}catch(e){alert(e.message)}};
 $('#delete-project').onclick=async()=>{if(!confirm('永久删除该项目及其记忆？'))return;try{await write('DELETE','/api/v1/projects/'+encodeURIComponent(project()),{confirm:true});state.project='';await init()}catch(e){alert(e.message)}};
+function syncThemeUI(theme){let isLight=theme==='light';$('#theme-icon-sun')?.classList.toggle('hidden',!isLight);$('#theme-icon-moon')?.classList.toggle('hidden',isLight)}
+function toggleTheme(){let cur=document.documentElement.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';document.documentElement.setAttribute('data-theme',next);try{localStorage.setItem('memdock-theme',next)}catch(e){}syncThemeUI(next)}
+$('#theme-toggle').onclick=toggleTheme;
+syncThemeUI(document.documentElement.getAttribute('data-theme')||'dark');
 init().catch(e=>{$('#health').textContent='服务异常';$('#health').setAttribute('data-state','error');alert(e.message)});
 </script>
 </body>

@@ -70,6 +70,7 @@ func TestSecureProjectGrantsAcrossRESTMCPAndBackup(t *testing.T) {
 	mux.HandleFunc("POST /api/v1/memories/search", a.searchMemories)
 	mux.HandleFunc("POST /api/v1/memories", a.createMemory)
 	mux.HandleFunc("GET /api/v1/memories/{id}", a.getMemory)
+	mux.HandleFunc("POST /api/v1/memories/{id}/move", a.moveMemory)
 	mux.HandleFunc("POST /api/v1/knowledge-bases", a.createKnowledgeBase)
 	mux.HandleFunc("GET /api/v1/backup", a.backup)
 	mux.HandleFunc("GET /api/v1/status", a.systemStatus)
@@ -172,6 +173,14 @@ func TestSecureProjectGrantsAcrossRESTMCPAndBackup(t *testing.T) {
 	resp, _ = request(http.MethodGet, "/api/v1/memories/mem-p2?project_id=p2", readA, "")
 	if resp.StatusCode != 403 {
 		t.Fatalf("cross-identity memory detail status=%d", resp.StatusCode)
+	}
+	resp, _ = request(http.MethodPost, "/api/v1/memories/mem-p1/move", writeA, `{"project_id":"p1","target_project_id":"p2","knowledge_base_id":"kb-p2"}`)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("move into unauthorized target project status=%d", resp.StatusCode)
+	}
+	resp, _ = request(http.MethodPost, "/api/v1/memories/mem-p2/move", writeA, `{"project_id":"p2","target_project_id":"p1","knowledge_base_id":"kb-p1"}`)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("move from unauthorized source project status=%d", resp.StatusCode)
 	}
 	resp, _ = request(http.MethodPost, "/api/v1/memories/search", readA, search("p2"))
 	if resp.StatusCode != 403 {

@@ -24,6 +24,10 @@ func TestWebEditorKeepsEditableTagsAndBlocksInsecureSigning(t *testing.T) {
 		"approve-request memdock-approval-request.json",
 		"Secure 模式：写操作仅导出审批请求文件",
 		"审批请求已下载，数据尚未修改",
+		"data-move=",
+		"target_project_id:target.id",
+		"/api/v1/memories/'+encodeURIComponent(id)+'/move",
+		"prompt('选择目标项目（输入序号）：\\n'",
 	} {
 		if !strings.Contains(rec.Body.String(), required) {
 			t.Errorf("web editor missing expected regression guard %q", required)
