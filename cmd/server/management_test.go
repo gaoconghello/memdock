@@ -82,16 +82,30 @@ func createManagementProject(t *testing.T, a *app, name string) string {
 	return result.ID
 }
 
+func createSharedKnowledgeBase(t *testing.T, a *app, name string) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-bases", strings.NewReader(`{"name":"`+name+`","kind":"shared"}`))
+	addWriteSecret(a, req)
+	a.createKnowledgeBase(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create shared library: %d %s", w.Code, w.Body)
+	}
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	return result.ID
+}
+
 func TestMemoryLifecycleTagsHistoryAndSearchIndex(t *testing.T) {
 	a := managementApp(t)
 	p := createManagementProject(t, a, "project")
-	kb := ""
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, p).Scan(&kb); err != nil {
-		t.Fatal(err)
-	}
 	id := makeID("mem")
 	now := "2025-01-01T00:00:00Z"
-	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES(?,?,?,?,?,?)`, id, kb, "old title", "old unique body", now, now); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memories(id,project_id,title,content,created_at,updated_at) VALUES(?,?,?,?,?,?)`, id, p, "old title", "old unique body", now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.db.Exec(`INSERT INTO memory_tags(memory_id,tag) VALUES(?,?)`, id, "old-tag"); err != nil {
@@ -112,11 +126,7 @@ func TestMemoryLifecycleTagsHistoryAndSearchIndex(t *testing.T) {
 		t.Fatalf("tags=%d revisions=%d", tags, revisions)
 	}
 	otherProject := createManagementProject(t, a, "other")
-	var otherKB string
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, otherProject).Scan(&otherKB); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('foreign-memory',?,'new title','new searchable phrase','n','n')`, otherKB); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memories(id,project_id,title,content,created_at,updated_at) VALUES('foreign-memory',?,'new title','new searchable phrase','n','n')`, otherProject); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.db.Exec(`INSERT INTO memory_tags(memory_id,tag) VALUES('foreign-memory','one')`); err != nil {
@@ -172,32 +182,26 @@ func TestMoveMemoryPreservesDataAndHistory(t *testing.T) {
 	a := managementApp(t)
 	source := createManagementProject(t, a, "move-source")
 	target := createManagementProject(t, a, "move-target")
-	var sourceKB, targetKB string
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, source).Scan(&sourceKB); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, target).Scan(&targetKB); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,category,status,created_at,updated_at) VALUES('move-me',?,'title','body','category','active','created','updated')`, sourceKB); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memories(id,project_id,title,content,category,status,created_at,updated_at) VALUES('move-me',?,'title','body','category','active','created','updated')`, source); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.db.Exec(`INSERT INTO memory_tags(memory_id,tag) VALUES('move-me','tag')`); err != nil {
 		t.Fatal(err)
 	}
-	moved := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`","knowledge_base_id":"`+targetKB+`"}`, a.moveMemory, true)
+	moved := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`"}`, a.moveMemory, true)
 	if moved.Code != http.StatusOK {
 		t.Fatalf("move status=%d body=%s", moved.Code, moved.Body)
 	}
-	var gotKB, title, content, category, status string
+	var gotProject, title, content, category, status string
+	var gotKB sql.NullString
 	var tags, revisions int
-	if err := a.db.QueryRow(`SELECT knowledge_base_id,title,content,category,status FROM memories WHERE id='move-me'`).Scan(&gotKB, &title, &content, &category, &status); err != nil {
+	if err := a.db.QueryRow(`SELECT project_id,knowledge_base_id,title,content,category,status FROM memories WHERE id='move-me'`).Scan(&gotProject, &gotKB, &title, &content, &category, &status); err != nil {
 		t.Fatal(err)
 	}
 	_ = a.db.QueryRow(`SELECT count(*) FROM memory_tags WHERE memory_id='move-me' AND tag='tag'`).Scan(&tags)
 	_ = a.db.QueryRow(`SELECT count(*) FROM memory_revisions WHERE memory_id='move-me'`).Scan(&revisions)
-	if gotKB != targetKB || title != "title" || content != "body" || category != "category" || status != "active" || tags != 1 || revisions != 1 {
-		t.Fatalf("move lost or changed data: kb=%s title=%s content=%s category=%s status=%s tags=%d revisions=%d", gotKB, title, content, category, status, tags, revisions)
+	if gotProject != target || gotKB.Valid || title != "title" || content != "body" || category != "category" || status != "active" || tags != 1 || revisions != 1 {
+		t.Fatalf("move lost or changed data: project=%s kb=%v title=%s content=%s category=%s status=%s tags=%d revisions=%d", gotProject, gotKB, title, content, category, status, tags, revisions)
 	}
 	oldList := httptest.NewRecorder()
 	a.listMemories(oldList, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+source, nil))
@@ -213,17 +217,35 @@ func TestMoveMemoryPreservesDataAndHistory(t *testing.T) {
 	if strings.Contains(searchSource.Body.String(), "move-me") || !strings.Contains(searchTarget.Body.String(), "move-me") {
 		t.Fatalf("memory search ownership incorrect: source=%s target=%s", searchSource.Body, searchTarget.Body)
 	}
-	wrongSource := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`","knowledge_base_id":"`+targetKB+`"}`, a.moveMemory, true)
+	wrongSource := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`"}`, a.moveMemory, true)
 	if wrongSource.Code != http.StatusNotFound {
 		t.Fatalf("wrong source project status=%d body=%s", wrongSource.Code, wrongSource.Body)
 	}
-	invalid := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+target+`","target_project_id":"`+source+`","knowledge_base_id":"`+targetKB+`"}`, a.moveMemory, true)
-	if invalid.Code != http.StatusBadRequest {
-		t.Fatalf("foreign target KB status=%d body=%s", invalid.Code, invalid.Body)
+	shared := createSharedKnowledgeBase(t, a, "move-shared")
+	toShared := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+target+`","knowledge_base_id":"`+shared+`"}`, a.moveMemory, true)
+	if toShared.Code != http.StatusOK {
+		t.Fatalf("move to shared status=%d body=%s", toShared.Code, toShared.Body)
+	}
+	var sharedProject sql.NullString
+	var sharedKB string
+	if err := a.db.QueryRow(`SELECT project_id,knowledge_base_id FROM memories WHERE id='move-me'`).Scan(&sharedProject, &sharedKB); err != nil {
+		t.Fatal(err)
+	}
+	if sharedProject.Valid || sharedKB != shared {
+		t.Fatalf("shared ownership incorrect: project=%v kb=%s", sharedProject, sharedKB)
+	}
+	searchSource = httptest.NewRecorder()
+	a.searchMemories(searchSource, httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", strings.NewReader(`{"project_id":"`+source+`","query":"body"}`)))
+	if !strings.Contains(searchSource.Body.String(), "move-me") {
+		t.Fatalf("shared memory not visible from another project: %s", searchSource.Body)
+	}
+	invalid := callManagement(t, a, http.MethodPost, "/api/v1/memories/move-me/move", `{"project_id":"`+source+`","target_project_id":"`+target+`","knowledge_base_id":"missing"}`, a.moveMemory, true)
+	if invalid.Code != http.StatusNotFound {
+		t.Fatalf("missing target library status=%d body=%s", invalid.Code, invalid.Body)
 	}
 }
 
-func TestProjectRepositoryAndKnowledgeBaseManagement(t *testing.T) {
+func TestSharedKnowledgeBaseManagement(t *testing.T) {
 	a := managementApp(t)
 	project := createManagementProject(t, a, "unbound")
 	bound := callManagement(t, a, http.MethodPost, "/api/v1/projects/"+project+"/repositories", `{"repository":"git@github.com:team/repo.git"}`, a.bindRepository, true)
@@ -241,84 +263,57 @@ func TestProjectRepositoryAndKnowledgeBaseManagement(t *testing.T) {
 	if unbound.Code != http.StatusNoContent {
 		t.Fatalf("unbind repository: %d %s", unbound.Code, unbound.Body)
 	}
-	var kb string
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, project).Scan(&kb); err != nil {
-		t.Fatal(err)
-	}
-	target := createManagementProject(t, a, "target")
-	for _, body := range []string{`{"kind":"shared"}`, `{"project_id":"` + target + `"}`} {
-		changed := callManagement(t, a, http.MethodPatch, "/api/v1/knowledge-bases/"+kb, body, a.updateKnowledgeBase, true)
-		if changed.Code != http.StatusConflict {
-			t.Fatalf("default knowledge base scope change should be rejected: %d %s", changed.Code, changed.Body)
+	for _, body := range []string{`{"name":"project library","kind":"project"}`, `{"name":"owned library","kind":"shared","project_id":"` + project + `"}`} {
+		rejected := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-bases", strings.NewReader(body))
+		addWriteSecret(a, req)
+		a.createKnowledgeBase(rejected, req)
+		if rejected.Code != http.StatusBadRequest {
+			t.Fatalf("project-owned library should be rejected: %d %s", rejected.Code, rejected.Body)
 		}
 	}
-	var defaults int
-	if err := a.db.QueryRow(`SELECT count(*) FROM knowledge_bases WHERE project_id IN (?,?) AND kind='project' AND is_default=1`, project, target).Scan(&defaults); err != nil || defaults != 2 {
-		t.Fatalf("default libraries lost after rejected move: count=%d err=%v", defaults, err)
+	shared := createSharedKnowledgeBase(t, a, "shared")
+	list := httptest.NewRecorder()
+	a.listKnowledgeBases(list, httptest.NewRequest(http.MethodGet, "/api/v1/knowledge-bases", nil))
+	if list.Code != 200 || !strings.Contains(list.Body.String(), shared) || !strings.Contains(list.Body.String(), `"kind":"shared"`) {
+		t.Fatalf("shared library list: %d %s", list.Code, list.Body)
 	}
-	createdKB := httptest.NewRecorder()
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-bases", strings.NewReader(`{"project_id":"`+project+`","name":"extra","kind":"project"}`))
-	addWriteSecret(a, createReq)
-	a.createKnowledgeBase(createdKB, createReq)
-	if createdKB.Code != http.StatusCreated {
-		t.Fatalf("create non-default knowledge base: %d %s", createdKB.Code, createdKB.Body)
+	renamed := callManagement(t, a, http.MethodPatch, "/api/v1/knowledge-bases/"+shared, `{"name":"renamed"}`, a.updateKnowledgeBase, true)
+	if renamed.Code != http.StatusOK {
+		t.Fatalf("rename shared library: %d %s", renamed.Code, renamed.Body)
 	}
-	var extraKB string
-	var extra struct {
-		ID string `json:"id"`
+	for _, body := range []string{`{"kind":"project"}`, `{"project_id":"` + project + `"}`} {
+		rejected := callManagement(t, a, http.MethodPatch, "/api/v1/knowledge-bases/"+shared, body, a.updateKnowledgeBase, true)
+		if rejected.Code != http.StatusBadRequest {
+			t.Fatalf("shared library scope change should be rejected: %d %s", rejected.Code, rejected.Body)
+		}
 	}
-	if err := json.Unmarshal(createdKB.Body.Bytes(), &extra); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('shared-memory',?,'shared','shared body','n','n')`, shared); err != nil {
 		t.Fatal(err)
 	}
-	extraKB = extra.ID
-	sharedKBRequest := httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-bases", strings.NewReader(`{"project_id":"`+project+`","name":"to-shared","kind":"project"}`))
-	addWriteSecret(a, sharedKBRequest)
-	sharedKBCreated := httptest.NewRecorder()
-	a.createKnowledgeBase(sharedKBCreated, sharedKBRequest)
-	var sharedKB struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(sharedKBCreated.Body.Bytes(), &sharedKB); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memory_revisions(memory_id,title,content,category,status,tags_json,updated_at,revised_at) VALUES('shared-memory','shared','shared body','','active','[]','n','n')`); err != nil {
 		t.Fatal(err)
 	}
-	toShared := callManagement(t, a, http.MethodPatch, "/api/v1/knowledge-bases/"+sharedKB.ID, `{"kind":"shared"}`, a.updateKnowledgeBase, true)
-	if toShared.Code != http.StatusOK {
-		t.Fatalf("convert non-default library to shared: %d %s", toShared.Code, toShared.Body)
+	deleted := callManagement(t, a, http.MethodDelete, "/api/v1/knowledge-bases/"+shared, `{"confirm":true}`, a.deleteKnowledgeBase, true)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete shared library: %d %s", deleted.Code, deleted.Body)
 	}
-	var sharedKind string
-	var sharedProject sql.NullString
-	var sharedDefault int
-	if err := a.db.QueryRow(`SELECT kind,project_id,is_default FROM knowledge_bases WHERE id=?`, sharedKB.ID).Scan(&sharedKind, &sharedProject, &sharedDefault); err != nil {
-		t.Fatal(err)
-	}
-	if sharedKind != "shared" || sharedProject.Valid || sharedDefault != 0 {
-		t.Fatalf("shared library state: kind=%s project=%v default=%d", sharedKind, sharedProject, sharedDefault)
-	}
-	moved := callManagement(t, a, http.MethodPatch, "/api/v1/knowledge-bases/"+extraKB, `{"project_id":"`+target+`"}`, a.updateKnowledgeBase, true)
-	if moved.Code != http.StatusOK {
-		t.Fatalf("move non-default knowledge base: %d %s", moved.Code, moved.Body)
-	}
-	var actualProject string
-	var isDefault int
-	if err := a.db.QueryRow(`SELECT project_id,is_default FROM knowledge_bases WHERE id=?`, extraKB).Scan(&actualProject, &isDefault); err != nil {
-		t.Fatal(err)
-	}
-	if actualProject != target || isDefault != 0 {
-		t.Fatalf("moved library state: project=%s default=%d", actualProject, isDefault)
-	}
-	if err := a.db.QueryRow(`SELECT count(*) FROM knowledge_bases WHERE project_id IN (?,?) AND kind='project' AND is_default=1`, project, target).Scan(&defaults); err != nil || defaults != 2 {
-		t.Fatalf("default libraries lost after regular library move: count=%d err=%v", defaults, err)
+	var memories, revisions int
+	_ = a.db.QueryRow(`SELECT count(*) FROM memories WHERE knowledge_base_id=?`, shared).Scan(&memories)
+	_ = a.db.QueryRow(`SELECT count(*) FROM memory_revisions WHERE memory_id='shared-memory'`).Scan(&revisions)
+	if memories != 0 || revisions != 0 {
+		t.Fatalf("shared library deletion left data: memories=%d revisions=%d", memories, revisions)
 	}
 }
 
 func TestProjectDeletionRequiresConfirmationAndRemovesProjectData(t *testing.T) {
 	a := managementApp(t)
 	project := createManagementProject(t, a, "delete-me")
-	var kb string
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, project).Scan(&kb); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memories(id,project_id,title,content,created_at,updated_at) VALUES('delete-me-memory',?,'title','indexed project data','n','n')`, project); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('delete-me-memory',?,'title','indexed project data','n','n')`, kb); err != nil {
+	shared := createSharedKnowledgeBase(t, a, "keep-shared")
+	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('keep-shared-memory',?,'shared','shared survives project deletion','n','n')`, shared); err != nil {
 		t.Fatal(err)
 	}
 	denied := callManagement(t, a, http.MethodDelete, "/api/v1/projects/"+project, `{}`, a.deleteProject, true)
@@ -336,16 +331,18 @@ func TestProjectDeletionRequiresConfirmationAndRemovesProjectData(t *testing.T) 
 	if err := a.db.QueryRow(`SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'indexed project data'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("deleted project memory remains indexed: count=%d err=%v", count, err)
 	}
+	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE id='keep-shared-memory'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("shared memory removed with project: count=%d err=%v", count, err)
+	}
 }
 
 func TestProjectMergePreservesMemoriesAndRepositoryConflictRule(t *testing.T) {
 	a := managementApp(t)
 	source := createManagementProject(t, a, "source")
 	target := createManagementProject(t, a, "target")
-	var sourceKB, targetKB string
-	_ = a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, source).Scan(&sourceKB)
-	_ = a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, target).Scan(&targetKB)
-	_, _ = a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('kept',?,'kept','merge searchable content','n','n')`, sourceKB)
+	shared := createSharedKnowledgeBase(t, a, "merge-shared")
+	_, _ = a.db.Exec(`INSERT INTO memories(id,project_id,title,content,created_at,updated_at) VALUES('kept',?,'kept','merge searchable content','n','n')`, source)
+	_, _ = a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('shared-kept',?,'shared','shared merge content','n','n')`, shared)
 	_, _ = a.db.Exec(`INSERT INTO repositories(canonical,project_id) VALUES('github.com/same/repo',?)`, target)
 	_, _ = a.db.Exec(`INSERT INTO repositories(canonical,project_id) VALUES('github.com/same/repo-source',?)`, source)
 	merged := callManagement(t, a, "POST", "/api/v1/projects/"+source+"/merge", `{"target_project_id":"`+target+`","confirm":true}`, a.mergeProject, true)
@@ -353,10 +350,111 @@ func TestProjectMergePreservesMemoriesAndRepositoryConflictRule(t *testing.T) {
 		t.Fatalf("merge: %d %s", merged.Code, merged.Body)
 	}
 	var count int
-	if err := a.db.QueryRow(`SELECT count(*) FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.id='kept' AND k.project_id=?`, target).Scan(&count); err != nil || count != 1 {
+	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE id='kept' AND project_id=?`, target).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("merged memory lost: count=%d err=%v", count, err)
+	}
+	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE id='shared-kept' AND knowledge_base_id=?`, shared).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("shared memory lost during merge: count=%d err=%v", count, err)
 	}
 	if err := a.db.QueryRow(`SELECT count(*) FROM project_operations WHERE source_project_id=? AND target_project_id=?`, source, target).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("merge operation missing: %d %v", count, err)
+	}
+}
+
+func TestProjectAndSharedMemoryScopes(t *testing.T) {
+	a := managementApp(t)
+	local := createManagementProject(t, a, "scope-local")
+	foreign := createManagementProject(t, a, "scope-foreign")
+	shared := createSharedKnowledgeBase(t, a, "scope-shared")
+	for _, memory := range []struct {
+		id, project, kb, title, content string
+	}{
+		{"local-memory", local, "", "local", "scope local content"},
+		{"foreign-memory", foreign, "", "foreign", "scope foreign content"},
+		{"shared-memory", "", shared, "shared", "scope shared content"},
+	} {
+		var projectValue, kbValue any
+		if memory.project != "" {
+			projectValue = memory.project
+		} else {
+			kbValue = memory.kb
+		}
+		if _, err := a.db.Exec(`INSERT INTO memories(id,project_id,knowledge_base_id,title,content,created_at,updated_at) VALUES(?,?,?,?,?,'n','n')`, memory.id, projectValue, kbValue, memory.title, memory.content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func(project, kb string) string {
+		t.Helper()
+		path := "/api/v1/memories?project_id=" + project
+		if kb != "" {
+			path += "&knowledge_base_id=" + kb
+		}
+		rec := httptest.NewRecorder()
+		a.listMemories(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list %s: %d %s", path, rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+	search := func(project, kb string) string {
+		t.Helper()
+		body := `{"project_id":"` + project + `","query":"scope content"`
+		if kb != "" {
+			body += `,"knowledge_base_id":"` + kb + `"`
+		}
+		body += `}`
+		rec := httptest.NewRecorder()
+		a.searchMemories(rec, httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("search %s: %d %s", body, rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+	localList, foreignList := list(local, ""), list(foreign, "")
+	if !strings.Contains(localList, "local-memory") || !strings.Contains(localList, "shared-memory") || strings.Contains(localList, "foreign-memory") {
+		t.Fatalf("local list scope incorrect: %s", localList)
+	}
+	if !strings.Contains(foreignList, "foreign-memory") || !strings.Contains(foreignList, "shared-memory") || strings.Contains(foreignList, "local-memory") {
+		t.Fatalf("foreign list scope incorrect: %s", foreignList)
+	}
+	if filtered := list(local, shared); strings.Contains(filtered, "local-memory") || !strings.Contains(filtered, "shared-memory") {
+		t.Fatalf("shared library filter returned project memories: %s", filtered)
+	}
+	if results := search(local, ""); !strings.Contains(results, "local-memory") || !strings.Contains(results, "shared-memory") || strings.Contains(results, "foreign-memory") {
+		t.Fatalf("default search scope incorrect: %s", results)
+	}
+	if results := search(local, shared); strings.Contains(results, "local-memory") || !strings.Contains(results, "shared-memory") {
+		t.Fatalf("shared library search returned project memories: %s", results)
+	}
+	get := func(project, id string) int {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/memories/"+id+"?project_id="+project, nil)
+		req.SetPathValue("id", id)
+		a.getMemory(rec, req)
+		return rec.Code
+	}
+	if code := get(local, "foreign-memory"); code != http.StatusNotFound {
+		t.Fatalf("foreign project memory detail status=%d", code)
+	}
+	if code := get(local, "shared-memory"); code != http.StatusOK {
+		t.Fatalf("shared memory detail status=%d", code)
+	}
+}
+
+func TestMemoryOwnershipIsMutuallyExclusive(t *testing.T) {
+	a := managementApp(t)
+	project := createManagementProject(t, a, "ownership")
+	shared := createSharedKnowledgeBase(t, a, "ownership-shared")
+	for _, tc := range []struct {
+		name, project, kb any
+	}{
+		{"both", project, shared},
+		{"neither", nil, nil},
+	} {
+		_, err := a.db.Exec(`INSERT INTO memories(id,project_id,knowledge_base_id,title,content,created_at,updated_at) VALUES(?,?,?,'title','body','n','n')`, tc.name, tc.project, tc.kb)
+		if err == nil {
+			t.Fatalf("memory ownership %q should violate the constraint", tc.name)
+		}
 	}
 }

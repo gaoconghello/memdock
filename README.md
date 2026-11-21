@@ -9,12 +9,14 @@ MemDock is a shared long-term memory service for coding agents. It provides a Go
 - **Project auto-identification**: Git remotes resolve to projects automatically, so memories are grouped and isolated per project and shared across devices and agents; repositories can be bound/unbound and projects merged.
 - **Long-term memory management**: create, update (with revision history), soft-delete, restore, and permanent-delete; each memory carries a title, content, category, tags, source, and timestamps.
 - **Full-text search tuned for Chinese**: SQLite FTS5 `trigram` tokenizer with keyword fallback handles Chinese phrases, mixed Chinese/English queries, and technical abbreviations; BM25 ranking, category/tag filters, project-scoped by default, and a small default result set (top 5) to avoid polluting the agent's context.
-- **Project libraries and shared libraries**: each project gets a default knowledge base; shared libraries hold cross-project memory with separate read/write authorization.
+- **Project memories and shared libraries**: project memories belong directly to their project, with no project library to create or select; shared libraries hold only cross-project memory, and multiple shared libraries are supported.
 - **User-driven writes**: the server never summarizes sessions on its own — save/update/delete are triggered explicitly by the user; agents only decide when to recall ("Users decide what to remember; agents decide when to recall").
 - **Three access channels**: REST API under `/api/v1`, MCP Streamable HTTP at `/mcp` (memory tools plus `project_list`, `project_lookup`, `project_resolve`, and `project_info`), and Codex/Pi Agent Skills (`mem-save`, `mem-search`).
 - **Web management UI**: dashboard, project management (rename, bind/unbind repositories, merge, delete), memory management (search, filter, edit, delete/restore), and system status.
 - **Two security modes**: `private` for trusted networks with unauthenticated reads and shared-secret API/MCP writes; `secure` requires HTTPS and the shared secret for all requests except health checks.
 - **Lightweight single-service deployment**: one Go binary + SQLite, no external database, no embedding/AI model service; Docker/Compose with persistent volume, health check, and built-in backup/restore.
+
+Current memory ownership model: project memories belong directly to a project, while shared libraries hold only shared memories. Searches default to the current project's memories plus all shared libraries, and multiple shared libraries remain supported. When upgrading an existing database, memories in project libraries become direct project memories with their IDs, content, tags, status, revision history, and search index preserved; shared libraries and their memories are unchanged.
 
 ## Quick Start
 
@@ -58,7 +60,7 @@ MEMDOCK_URL=http://localhost:8080 ./scripts/mem-save.sh \
 The script shows a preview and asks for `y` in the terminal; the project is resolved automatically from the Git remote, and the server returns:
 
 ```json
-{"id":"mem_xxx","knowledge_base_id":"kb_xxx","title":"登录鉴权方案","created_at":"2026-..."}
+{"id":"mem_xxx","project_id":"prj_xxx","title":"登录鉴权方案","created_at":"2026-..."}
 ```
 
 Scripts require `curl` and `jq`.
@@ -80,8 +82,9 @@ MEMDOCK_URL=http://localhost:8080 ./scripts/mem-search.sh "JWT 身份认证"
       "title": "登录鉴权方案",
       "content": "项目采用 JWT 身份认证，刷新令牌存于 Redis，有效期 7 天。",
       "category": "",
-      "knowledge_base_id": "kb_xxx",
-      "knowledge_base_name": "默认项目库",
+      "project_id": "prj_xxx",
+      "knowledge_base_id": "",
+      "knowledge_base_name": "your-project",
       "knowledge_base_type": "project",
       "updated_at": "2026-..."
     }

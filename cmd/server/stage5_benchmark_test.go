@@ -33,14 +33,11 @@ func TestStage5Benchmark100k(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO projects(id,name,created_at) VALUES('p','benchmark','2026-01-01')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO knowledge_bases(id,project_id,name,kind,is_default,created_at) VALUES('k','p','default','project',1,'2026-01-01')`); err != nil {
-		t.Fatal(err)
-	}
 	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	stmt, err := tx.Prepare(`INSERT INTO memories(id,knowledge_base_id,title,content,category,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`)
+	stmt, err := tx.Prepare(`INSERT INTO memories(id,project_id,title,content,category,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +47,7 @@ func TestStage5Benchmark100k(t *testing.T) {
 			content += " architecture decision benchmark phrase"
 		}
 		id := fmt.Sprintf("m-%06d", i)
-		if _, err = stmt.Exec(id, "k", fmt.Sprintf("Engineering note %06d", i), content, "design", "2026-01-01", "2026-01-01"); err != nil {
+		if _, err = stmt.Exec(id, "p", fmt.Sprintf("Engineering note %06d", i), content, "design", "2026-01-01", "2026-01-01"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,14 +68,14 @@ func TestStage5Benchmark100k(t *testing.T) {
 	// Run ten untimed warm-up rounds before collecting 100 measured samples.
 	for i := -10; i < 100; i++ {
 		start := time.Now()
-		rows, err := db.Query(`SELECT m.id,m.title,m.content,m.category,k.id,k.name,k.kind,m.updated_at FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.status='active' AND (k.kind='shared' OR k.project_id=?) AND m.rowid IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?) ORDER BY m.updated_at DESC LIMIT ?`, "p", `"architecture" AND "decision"`, 5)
+		rows, err := db.Query(`SELECT m.id,m.title,m.content,m.category,coalesce(m.project_id,''),coalesce(m.knowledge_base_id,''),CASE WHEN m.knowledge_base_id IS NULL THEN coalesce(p.name,'') ELSE k.name END,CASE WHEN m.knowledge_base_id IS NULL THEN 'project' ELSE 'shared' END,m.updated_at FROM memories m LEFT JOIN knowledge_bases k ON k.id=m.knowledge_base_id LEFT JOIN projects p ON p.id=m.project_id WHERE m.status='active' AND (m.project_id=? OR m.knowledge_base_id IS NOT NULL) AND m.rowid IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?) ORDER BY m.updated_at DESC LIMIT ?`, "p", `"architecture" AND "decision"`, 5)
 		if err != nil {
 			t.Fatal(err)
 		}
 		count := 0
 		for rows.Next() {
-			var x [8]string
-			if err = rows.Scan(&x[0], &x[1], &x[2], &x[3], &x[4], &x[5], &x[6], &x[7]); err != nil {
+			var x [9]string
+			if err = rows.Scan(&x[0], &x[1], &x[2], &x[3], &x[4], &x[5], &x[6], &x[7], &x[8]); err != nil {
 				t.Fatal(err)
 			}
 			count++

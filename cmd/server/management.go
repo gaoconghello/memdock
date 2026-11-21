@@ -117,11 +117,11 @@ func (a *app) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "project not found")
 		return
 	}
-	if _, err := tx.ExecContext(r.Context(), `DELETE FROM memory_revisions WHERE memory_id IN (SELECT m.id FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE k.project_id=?)`, id); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM memory_revisions WHERE memory_id IN (SELECT id FROM memories WHERE project_id=?)`, id); err != nil {
 		writeError(w, 500, "could not delete project history")
 		return
 	}
-	if _, err := tx.ExecContext(r.Context(), `DELETE FROM memories WHERE knowledge_base_id IN (SELECT id FROM knowledge_bases WHERE project_id=?)`, id); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM memories WHERE project_id=?`, id); err != nil {
 		writeError(w, 500, "could not delete project memories")
 		return
 	}
@@ -162,20 +162,16 @@ func (a *app) mergeProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "source or target project not found")
 		return
 	}
-	// Keep both projects' memories by converting the source default library to a regular project library before moving it.
-	if _, err = tx.ExecContext(r.Context(), `UPDATE knowledge_bases SET is_default=0,name=name || '（合并）' WHERE project_id=? AND is_default=1`, source); err != nil {
-		writeError(w, 500, "could not prepare source default library")
-		return
-	}
-	if _, err = tx.ExecContext(r.Context(), `UPDATE knowledge_bases SET project_id=? WHERE project_id=? AND kind='project'`, req.TargetID, source); err != nil {
-		writeError(w, 500, "could not move project knowledge bases")
+	// Move project memories to the target project; shared memories are unaffected.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = tx.ExecContext(r.Context(), `UPDATE memories SET project_id=?,updated_at=? WHERE project_id=?`, req.TargetID, now, source); err != nil {
+		writeError(w, 500, "could not move project memories")
 		return
 	}
 	if _, err = tx.ExecContext(r.Context(), `UPDATE repositories SET project_id=? WHERE project_id=? AND canonical NOT IN (SELECT canonical FROM repositories WHERE project_id=?)`, req.TargetID, source, req.TargetID); err != nil {
 		writeError(w, 500, "could not move repository bindings")
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err = tx.ExecContext(r.Context(), `INSERT INTO project_operations(source_project_id,target_project_id,action,created_at) VALUES(?,?,?,?)`, source, req.TargetID, "merge", now); err != nil {
 		writeError(w, 500, "could not record merge")
 		return
@@ -192,7 +188,7 @@ func (a *app) mergeProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) listKnowledgeBases(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.db.QueryContext(r.Context(), `SELECT id,coalesce(project_id,''),name,kind,is_default,created_at FROM knowledge_bases ORDER BY kind,name,id`)
+	rows, err := a.db.QueryContext(r.Context(), `SELECT id,name,created_at FROM knowledge_bases ORDER BY name,id`)
 	if err != nil {
 		writeError(w, 500, "database error")
 		return
@@ -200,13 +196,12 @@ func (a *app) listKnowledgeBases(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, pid, name, kind, created string
-		var def int
-		if err := rows.Scan(&id, &pid, &name, &kind, &def, &created); err != nil {
+		var id, name, created string
+		if err := rows.Scan(&id, &name, &created); err != nil {
 			writeError(w, 500, "database error")
 			return
 		}
-		items = append(items, map[string]any{"id": id, "project_id": pid, "name": name, "kind": kind, "is_default": def == 1, "created_at": created})
+		items = append(items, map[string]any{"id": id, "project_id": "", "name": name, "kind": "shared", "is_default": false, "created_at": created})
 	}
 	if rows.Err() != nil {
 		writeError(w, 500, "database error")
@@ -226,18 +221,18 @@ func (a *app) updateKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	tx, err := a.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeError(w, 500, "database error")
+	if req.Kind != "" && req.Kind != "shared" {
+		writeError(w, 400, "only shared knowledge bases are supported")
 		return
 	}
-	defer tx.Rollback()
-	var oldKind, oldName string
-	var oldProject sql.NullString
-	var isDefault int
-	if err := tx.QueryRowContext(r.Context(), `SELECT kind,project_id,name,is_default FROM knowledge_bases WHERE id=?`, r.PathValue("id")).Scan(&oldKind, &oldProject, &oldName, &isDefault); err != nil {
-		writeError(w, 404, "knowledge base not found")
+	if req.ProjectID != "" {
+		writeError(w, 400, "shared knowledge bases do not belong to a project")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	var oldName string
+	if err := a.db.QueryRowContext(r.Context(), `SELECT name FROM knowledge_bases WHERE id=?`, r.PathValue("id")).Scan(&oldName); err != nil {
+		writeError(w, 404, "shared knowledge base not found")
 		return
 	}
 	if req.Name == "" {
@@ -247,47 +242,11 @@ func (a *app) updateKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "knowledge base name must be <= 200 bytes")
 		return
 	}
-	kind := oldKind
-	if req.Kind != "" {
-		kind = req.Kind
-	}
-	pid := oldProject.String
-	if req.ProjectID != "" {
-		pid = req.ProjectID
-	} else if kind == "shared" {
-		pid = ""
-	}
-	if kind != "project" && kind != "shared" || (kind == "project" && pid == "") || (kind == "shared" && pid != "") {
-		writeError(w, 400, "valid kind/project_id combination required; shared libraries have no project_id")
+	if _, err := a.db.ExecContext(r.Context(), `UPDATE knowledge_bases SET name=? WHERE id=?`, req.Name, r.PathValue("id")); err != nil {
+		writeError(w, 500, "could not update shared knowledge base")
 		return
 	}
-	if isDefault == 1 && (kind != "project" || pid != oldProject.String) {
-		writeError(w, 409, "default project knowledge base cannot change type or project; create a replacement library first")
-		return
-	}
-	if kind == "project" {
-		var exists int
-		if err := tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, pid).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
-			writeError(w, 404, "project not found")
-			return
-		} else if err != nil {
-			writeError(w, 500, "database error")
-			return
-		}
-	}
-	defaultValue := isDefault
-	if kind == "shared" || pid != oldProject.String {
-		defaultValue = 0
-	}
-	if _, err := tx.ExecContext(r.Context(), `UPDATE knowledge_bases SET name=?,kind=?,project_id=?,is_default=? WHERE id=?`, req.Name, kind, nullString(pid), defaultValue, r.PathValue("id")); err != nil {
-		writeError(w, 409, "could not update knowledge base; project default conflicts are not allowed")
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		writeError(w, 500, "database error")
-		return
-	}
-	writeJSON(w, 200, map[string]string{"id": r.PathValue("id"), "name": req.Name, "kind": kind, "project_id": pid})
+	writeJSON(w, 200, map[string]string{"id": r.PathValue("id"), "name": req.Name, "kind": "shared", "project_id": ""})
 }
 func (a *app) deleteKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 	if !a.verifyWriteSignature(w, r) {
@@ -300,16 +259,12 @@ func (a *app) deleteKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !req.Confirm {
-		writeError(w, 400, "confirm must be true to delete knowledge base and its memories")
+		writeError(w, 400, "confirm must be true to delete shared knowledge base and its memories")
 		return
 	}
-	var def int
-	if err := a.db.QueryRowContext(r.Context(), `SELECT is_default FROM knowledge_bases WHERE id=?`, r.PathValue("id")).Scan(&def); err != nil {
-		writeError(w, 404, "knowledge base not found")
-		return
-	}
-	if def == 1 {
-		writeError(w, 409, "default project knowledge base cannot be deleted")
+	var exists int
+	if err := a.db.QueryRowContext(r.Context(), `SELECT 1 FROM knowledge_bases WHERE id=?`, r.PathValue("id")).Scan(&exists); err != nil {
+		writeError(w, 404, "shared knowledge base not found")
 		return
 	}
 	tx, err := a.db.BeginTx(r.Context(), nil)
@@ -319,15 +274,15 @@ func (a *app) deleteKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM memory_revisions WHERE memory_id IN (SELECT id FROM memories WHERE knowledge_base_id=?)`, r.PathValue("id")); err != nil {
-		writeError(w, 500, "could not delete knowledge base history")
+		writeError(w, 500, "could not delete shared library history")
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM memories WHERE knowledge_base_id=?`, r.PathValue("id")); err != nil {
-		writeError(w, 500, "could not delete knowledge base memories")
+		writeError(w, 500, "could not delete shared library memories")
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM knowledge_bases WHERE id=?`, r.PathValue("id")); err != nil {
-		writeError(w, 500, "could not delete knowledge base")
+		writeError(w, 500, "could not delete shared knowledge base")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -356,22 +311,13 @@ func (a *app) listMemories(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "status must be active or deleted")
 		return
 	}
-	if kbID != "" {
-		var accessible int
-		err := a.db.QueryRowContext(r.Context(), `SELECT 1 FROM knowledge_bases WHERE id=? AND (kind='shared' OR project_id=?)`, kbID, projectID).Scan(&accessible)
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, 404, "knowledge base not found for project")
-			return
-		}
-		if err != nil {
-			writeError(w, 500, "database error")
-			return
-		}
+	if kbID != "" && !a.sharedKnowledgeBaseExists(w, r, kbID) {
+		return
 	}
-	query := `SELECT m.id,m.knowledge_base_id,k.name,k.kind,m.title,m.content,m.category,m.status,m.created_at,m.updated_at,COALESCE((SELECT json_group_array(tag) FROM (SELECT tag FROM memory_tags WHERE memory_id=m.id ORDER BY tag)), '[]') FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.status=? AND (k.kind='shared' OR k.project_id=?)`
+	query := `SELECT m.id,coalesce(m.project_id,''),coalesce(m.knowledge_base_id,''),CASE WHEN m.knowledge_base_id IS NULL THEN coalesce(p.name,'') ELSE k.name END,CASE WHEN m.knowledge_base_id IS NULL THEN 'project' ELSE 'shared' END,m.title,m.content,m.category,m.status,m.created_at,m.updated_at,COALESCE((SELECT json_group_array(tag) FROM (SELECT tag FROM memory_tags WHERE memory_id=m.id ORDER BY tag)), '[]') FROM memories m LEFT JOIN knowledge_bases k ON k.id=m.knowledge_base_id LEFT JOIN projects p ON p.id=m.project_id WHERE m.status=? AND (m.project_id=? OR m.knowledge_base_id IS NOT NULL)`
 	args := []any{status, projectID}
 	if kbID != "" {
-		query += ` AND k.id=?`
+		query += ` AND m.knowledge_base_id=?`
 		args = append(args, kbID)
 	}
 	if tag != "" {
@@ -387,12 +333,12 @@ func (a *app) listMemories(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, kb, kbName, kbKind, title, content, category, state, created, updated, tagsJSON string
-		if err := rows.Scan(&id, &kb, &kbName, &kbKind, &title, &content, &category, &state, &created, &updated, &tagsJSON); err != nil {
+		var id, project, kb, kbName, kbKind, title, content, category, state, created, updated, tagsJSON string
+		if err := rows.Scan(&id, &project, &kb, &kbName, &kbKind, &title, &content, &category, &state, &created, &updated, &tagsJSON); err != nil {
 			writeError(w, 500, "database error")
 			return
 		}
-		items = append(items, map[string]any{"id": id, "knowledge_base_id": kb, "knowledge_base_name": kbName, "knowledge_base_type": kbKind, "title": title, "content": content, "category": category, "status": state, "created_at": created, "updated_at": updated, "tags": json.RawMessage(tagsJSON)})
+		items = append(items, map[string]any{"id": id, "project_id": project, "knowledge_base_id": kb, "knowledge_base_name": kbName, "knowledge_base_type": kbKind, "title": title, "content": content, "category": category, "status": state, "created_at": created, "updated_at": updated, "tags": json.RawMessage(tagsJSON)})
 	}
 	if rows.Err() != nil {
 		writeError(w, 500, "database error")
@@ -409,14 +355,13 @@ func (a *app) getMemory(w http.ResponseWriter, r *http.Request) {
 	if !a.memoryAccessible(w, r, r.PathValue("id"), projectID) {
 		return
 	}
-	var item map[string]any
-	var kb, title, content, category, state, created, updated string
-	err := a.db.QueryRowContext(r.Context(), `SELECT knowledge_base_id,title,content,category,status,created_at,updated_at FROM memories WHERE id=?`, r.PathValue("id")).Scan(&kb, &title, &content, &category, &state, &created, &updated)
+	var project, kb, kbName, kbKind, title, content, category, state, created, updated string
+	err := a.db.QueryRowContext(r.Context(), `SELECT coalesce(m.project_id,''),coalesce(m.knowledge_base_id,''),CASE WHEN m.knowledge_base_id IS NULL THEN coalesce(p.name,'') ELSE k.name END,CASE WHEN m.knowledge_base_id IS NULL THEN 'project' ELSE 'shared' END,m.title,m.content,m.category,m.status,m.created_at,m.updated_at FROM memories m LEFT JOIN knowledge_bases k ON k.id=m.knowledge_base_id LEFT JOIN projects p ON p.id=m.project_id WHERE m.id=?`, r.PathValue("id")).Scan(&project, &kb, &kbName, &kbKind, &title, &content, &category, &state, &created, &updated)
 	if err != nil {
 		writeError(w, 404, "memory not found")
 		return
 	}
-	item = map[string]any{"id": r.PathValue("id"), "knowledge_base_id": kb, "title": title, "content": content, "category": category, "status": state, "created_at": created, "updated_at": updated, "tags": a.memoryTags(r, r.PathValue("id"))}
+	item := map[string]any{"id": r.PathValue("id"), "project_id": project, "knowledge_base_id": kb, "knowledge_base_name": kbName, "knowledge_base_type": kbKind, "title": title, "content": content, "category": category, "status": state, "created_at": created, "updated_at": updated, "tags": a.memoryTags(r, r.PathValue("id"))}
 	writeJSON(w, 200, item)
 }
 func (a *app) memoryAccessible(w http.ResponseWriter, r *http.Request, memoryID, projectID string) bool {
@@ -428,7 +373,7 @@ func (a *app) memoryAccessible(w http.ResponseWriter, r *http.Request, memoryID,
 		return false
 	}
 	var accessible int
-	err := a.db.QueryRowContext(r.Context(), `SELECT 1 FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.id=? AND (k.kind='shared' OR k.project_id=?)`, memoryID, projectID).Scan(&accessible)
+	err := a.db.QueryRowContext(r.Context(), `SELECT 1 FROM memories WHERE id=? AND (project_id=? OR knowledge_base_id IS NOT NULL)`, memoryID, projectID).Scan(&accessible)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "memory not found for project")
 		return false
@@ -591,8 +536,8 @@ func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ProjectID == "" || req.TargetProjectID == "" || req.KnowledgeBaseID == "" {
-		writeError(w, 400, "project_id, target_project_id and knowledge_base_id are required")
+	if req.ProjectID == "" || (req.KnowledgeBaseID == "" && req.TargetProjectID == "") {
+		writeError(w, 400, "project_id and either target_project_id or knowledge_base_id are required")
 		return
 	}
 	tx, err := a.db.BeginTx(r.Context(), nil)
@@ -602,8 +547,8 @@ func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	id := r.PathValue("id")
-	var sourceKind, sourceOwner, currentKB string
-	err = tx.QueryRowContext(r.Context(), `SELECT k.kind,coalesce(k.project_id,''),m.knowledge_base_id FROM memories m JOIN knowledge_bases k ON k.id=m.knowledge_base_id WHERE m.id=?`, id).Scan(&sourceKind, &sourceOwner, &currentKB)
+	var sourceProject, sourceKB, sourceUpdatedAt string
+	err = tx.QueryRowContext(r.Context(), `SELECT coalesce(project_id,''),coalesce(knowledge_base_id,''),updated_at FROM memories WHERE id=?`, id).Scan(&sourceProject, &sourceKB, &sourceUpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "memory not found for project")
 		return
@@ -612,7 +557,12 @@ func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "database error")
 		return
 	}
-	if sourceKind == "shared" {
+	if sourceProject != "" {
+		if sourceProject != req.ProjectID {
+			writeError(w, 404, "memory not found for project")
+			return
+		}
+	} else {
 		var sourceProjectExists int
 		err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, req.ProjectID).Scan(&sourceProjectExists)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -623,42 +573,47 @@ func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "database error")
 			return
 		}
-	} else if sourceKind != "project" || sourceOwner != req.ProjectID {
-		writeError(w, 404, "memory not found for project")
+	}
+	if req.KnowledgeBaseID == "" {
+		var targetProjectExists int
+		if err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, req.TargetProjectID).Scan(&targetProjectExists); errors.Is(err, sql.ErrNoRows) {
+			writeError(w, 404, "target project not found")
+			return
+		} else if err != nil {
+			writeError(w, 500, "database error")
+			return
+		}
+	}
+	if req.KnowledgeBaseID != "" {
+		var sharedExists int
+		if err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM knowledge_bases WHERE id=?`, req.KnowledgeBaseID).Scan(&sharedExists); errors.Is(err, sql.ErrNoRows) {
+			writeError(w, 404, "target shared knowledge base not found")
+			return
+		} else if err != nil {
+			writeError(w, 500, "database error")
+			return
+		}
+	}
+	if sourceProject == req.TargetProjectID && sourceKB == "" && req.KnowledgeBaseID == "" {
+		writeJSON(w, 200, map[string]string{"id": id, "project_id": sourceProject, "knowledge_base_id": "", "updated_at": sourceUpdatedAt})
 		return
 	}
-	var projectExists int
-	if err = tx.QueryRowContext(r.Context(), `SELECT 1 FROM projects WHERE id=?`, req.TargetProjectID).Scan(&projectExists); errors.Is(err, sql.ErrNoRows) {
-		writeError(w, 404, "target project not found")
-		return
-	} else if err != nil {
-		writeError(w, 500, "database error")
-		return
-	}
-	var targetOwner, targetKind string
-	err = tx.QueryRowContext(r.Context(), `SELECT coalesce(project_id,''),kind FROM knowledge_bases WHERE id=?`, req.KnowledgeBaseID).Scan(&targetOwner, &targetKind)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, 404, "target knowledge base not found")
-		return
-	}
-	if err != nil {
-		writeError(w, 500, "database error")
-		return
-	}
-	if targetKind != "project" || targetOwner != req.TargetProjectID {
-		writeError(w, 400, "target knowledge base must belong to target project")
-		return
-	}
-	if currentKB == req.KnowledgeBaseID {
-		writeJSON(w, 200, map[string]string{"id": id, "knowledge_base_id": currentKB})
+	if sourceProject == "" && sourceKB == req.KnowledgeBaseID && req.KnowledgeBaseID != "" {
+		writeJSON(w, 200, map[string]string{"id": id, "project_id": "", "knowledge_base_id": sourceKB, "updated_at": sourceUpdatedAt})
 		return
 	}
 	if err = saveRevision(tx, id); err != nil {
 		writeError(w, 404, "memory not found")
 		return
 	}
+	var projectValue, kbValue any
+	if req.KnowledgeBaseID == "" {
+		projectValue = req.TargetProjectID
+	} else {
+		kbValue = req.KnowledgeBaseID
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := tx.ExecContext(r.Context(), `UPDATE memories SET knowledge_base_id=?,updated_at=? WHERE id=? AND knowledge_base_id=?`, req.KnowledgeBaseID, now, id, currentKB)
+	result, err := tx.ExecContext(r.Context(), `UPDATE memories SET project_id=?,knowledge_base_id=?,updated_at=? WHERE id=? AND coalesce(project_id,'')=? AND coalesce(knowledge_base_id,'')=?`, projectValue, kbValue, now, id, sourceProject, sourceKB)
 	if err != nil {
 		writeError(w, 500, "could not move memory")
 		return
@@ -671,7 +626,13 @@ func (a *app) moveMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "database error")
 		return
 	}
-	writeJSON(w, 200, map[string]string{"id": id, "knowledge_base_id": req.KnowledgeBaseID, "updated_at": now})
+	response := map[string]string{"id": id, "project_id": "", "knowledge_base_id": "", "updated_at": now}
+	if req.KnowledgeBaseID == "" {
+		response["project_id"] = req.TargetProjectID
+	} else {
+		response["knowledge_base_id"] = req.KnowledgeBaseID
+	}
+	writeJSON(w, 200, response)
 }
 
 func (a *app) deleteMemory(w http.ResponseWriter, r *http.Request) {

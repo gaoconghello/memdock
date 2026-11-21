@@ -9,12 +9,14 @@ MemDock 是面向 Coding Agent 的共享长期记忆服务，提供 Go/SQLite AP
 - **项目自动识别**：通过 Git 仓库远程地址自动识别并归组项目，记忆按项目隔离，跨设备、跨 Agent 共享；支持绑定/解绑仓库和项目合并。
 - **长期记忆管理**：创建、更新（保留修改历史）、软删除、恢复和永久删除；每条记忆含标题、正文、分类、标签、来源和时间戳。
 - **支持中文的全文检索**：SQLite FTS5 `trigram` 分词器加关键词回退，覆盖中文短语、中英文混合查询和技术缩写；BM25 相关性排序、分类/标签筛选，默认限定当前项目，默认仅返回前 5 条，避免污染 Agent 上下文。
-- **项目库与共享库**：每个项目有默认知识库；共享库存放跨项目记忆，读/写权限单独授权。
+- **项目记忆与共享库**：项目记忆直接归属项目，无需创建或选择项目库；共享库只存放跨项目共享记忆，可保留多个。
 - **写入由用户驱动**：服务端不自动总结会话——保存/更新/删除均由用户明确触发，Agent 只决定何时回忆（“用户决定记住什么，Agent 决定什么时候需要回忆”）。
 - **三种接入方式**：REST API（`/api/v1`）、MCP Streamable HTTP（`/mcp`，工具：`memory_search`、`memory_save`、`memory_list`、`memory_update`、`memory_delete`、`project_info`）、Codex/Pi Agent Skill（`mem-save`、`mem-search`）。
 - **Web 管理界面**：首页概览、项目管理（重命名、绑定/解绑仓库、合并、删除）、记忆管理（搜索、筛选、编辑、删除/恢复）、系统状态。
 - **两种安全模式**：`private` 面向可信网络，读取免认证、API/MCP 写入使用共享密钥；`secure` 强制 HTTPS，并对除健康检查外的所有请求使用同一密钥认证。
 - **轻量单体部署**：单个 Go 二进制 + SQLite，无外部数据库、无 Embedding/AI 模型服务；Docker/Compose 持久化部署，内置健康检查与备份恢复。
+
+当前记忆归属模型：项目记忆直接归属项目，共享库只承载共享记忆；默认检索当前项目记忆和全部共享库，并保留多个共享库。升级已有数据库时，原项目库记忆会转为其所属项目的直属记忆，保留 ID、正文、标签、状态、版本和搜索索引；共享库及共享记忆保持不变。
 
 ## 快速开始
 
@@ -58,7 +60,7 @@ MEMDOCK_URL=http://localhost:8080 ./scripts/mem-save.sh \
 脚本先展示预览并要求在终端输入 `y` 确认；项目从 Git 远程地址自动识别，服务端返回：
 
 ```json
-{"id":"mem_xxx","knowledge_base_id":"kb_xxx","title":"登录鉴权方案","created_at":"2026-..."}
+{"id":"mem_xxx","project_id":"prj_xxx","title":"登录鉴权方案","created_at":"2026-..."}
 ```
 
 脚本依赖 `curl` 和 `jq`。
@@ -80,8 +82,9 @@ MEMDOCK_URL=http://localhost:8080 ./scripts/mem-search.sh "JWT 身份认证"
       "title": "登录鉴权方案",
       "content": "项目采用 JWT 身份认证，刷新令牌存于 Redis，有效期 7 天。",
       "category": "",
-      "knowledge_base_id": "kb_xxx",
-      "knowledge_base_name": "默认项目库",
+      "project_id": "prj_xxx",
+      "knowledge_base_id": "",
+      "knowledge_base_name": "your-project",
       "knowledge_base_type": "project",
       "updated_at": "2026-..."
     }

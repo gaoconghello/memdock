@@ -23,9 +23,9 @@ func TestWebEditorUsesPrivateAdminSessionAndUnifiedSecureCredential(t *testing.T
 		"state.mode==='private'&&!state.admin",
 		"Secure 模式：所有访问均需共享密钥；通过 HTTPS 直接读写。",
 		"data-move=",
-		"target_project_id:target.id",
+		"payload.target_project_id=target.id",
 		"/api/v1/memories/'+encodeURIComponent(id)+'/move",
-		"prompt('选择目标项目（输入序号）：\\n'",
+		"prompt('移动目标：\\n1. 项目记忆\\n2. 共享知识库\\n输入序号：')",
 	} {
 		if !strings.Contains(rec.Body.String(), required) {
 			t.Errorf("web editor missing expected regression guard %q", required)

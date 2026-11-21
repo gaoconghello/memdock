@@ -51,11 +51,18 @@ func TestResolveWithoutRepositoryCreatesDistinctProjects(t *testing.T) {
 		if err := json.Unmarshal(r.Body.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
+		if _, exists := result["knowledge_base_id"]; exists {
+			t.Fatalf("project initialization still returns a project library: %v", result)
+		}
 		return result
 	}
 	first, second := resolve(), resolve()
 	if first["project_id"] == "" || second["project_id"] == "" || first["project_id"] == second["project_id"] {
 		t.Fatalf("same folder names unexpectedly merged: %v %v", first, second)
+	}
+	var libraryCount int
+	if err := a.db.QueryRow(`SELECT count(*) FROM knowledge_bases`).Scan(&libraryCount); err != nil || libraryCount != 0 {
+		t.Fatalf("project initialization created a knowledge base: count=%d err=%v", libraryCount, err)
 	}
 }
 
@@ -85,6 +92,16 @@ func TestMemoryReadWriteIsolationAcrossProjects(t *testing.T) {
 	a.createMemory(write, request)
 	if write.Code != http.StatusCreated {
 		t.Fatalf("save status=%d body=%s", write.Code, write.Body)
+	}
+	var saved struct {
+		ProjectID       string `json:"project_id"`
+		KnowledgeBaseID string `json:"knowledge_base_id"`
+	}
+	if err := json.Unmarshal(write.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.ProjectID != p1 || saved.KnowledgeBaseID != "" {
+		t.Fatalf("project save returned wrong ownership: %+v", saved)
 	}
 	search := func(project, query string) *httptest.ResponseRecorder {
 		r := httptest.NewRecorder()

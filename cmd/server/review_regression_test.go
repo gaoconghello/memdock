@@ -25,11 +25,7 @@ func TestHTTPMemoryListWithSingleConnectionAndTags(t *testing.T) {
 	}
 	a := &app{db: db, writeSecret: []byte(strings.Repeat("s", 32))}
 	projectID := createManagementProject(t, a, "single-connection")
-	var kbID string
-	if err := db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, projectID).Scan(&kbID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('tagged-memory',?,'title','body','n','n')`, kbID); err != nil {
+	if _, err := db.Exec(`INSERT INTO memories(id,project_id,title,content,created_at,updated_at) VALUES('tagged-memory',?,'title','body','n','n')`, projectID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO memory_tags(memory_id,tag) VALUES('tagged-memory','tested-tag')`); err != nil {
@@ -55,11 +51,7 @@ func TestMemoryManagementRequiresMatchingProjectScope(t *testing.T) {
 	a := managementApp(t)
 	localProject := createManagementProject(t, a, "local")
 	foreignProject := createManagementProject(t, a, "foreign")
-	var foreignKB string
-	if err := a.db.QueryRow(`SELECT id FROM knowledge_bases WHERE project_id=? AND is_default=1`, foreignProject).Scan(&foreignKB); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.db.Exec(`INSERT INTO memories(id,knowledge_base_id,title,content,created_at,updated_at) VALUES('foreign-memory',?,'secret title','foreign scoped content','n','n')`, foreignKB); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO memories(id,project_id,title,content,created_at,updated_at) VALUES('foreign-memory',?,'secret title','foreign scoped content','n','n')`, foreignProject); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.db.Exec(`INSERT INTO memory_revisions(memory_id,title,content,category,status,tags_json,updated_at,revised_at) VALUES('foreign-memory','secret title','foreign scoped content','','active','[]','n','n')`); err != nil {
@@ -67,14 +59,14 @@ func TestMemoryManagementRequiresMatchingProjectScope(t *testing.T) {
 	}
 
 	listWithoutProject := httptest.NewRecorder()
-	a.listMemories(listWithoutProject, httptest.NewRequest(http.MethodGet, "/api/v1/memories?knowledge_base_id="+foreignKB, nil))
+	a.listMemories(listWithoutProject, httptest.NewRequest(http.MethodGet, "/api/v1/memories?knowledge_base_id=missing-kb", nil))
 	if listWithoutProject.Code != http.StatusBadRequest {
 		t.Fatalf("knowledge-base-only list status=%d body=%s", listWithoutProject.Code, listWithoutProject.Body)
 	}
 	foreignKBWithLocalProject := httptest.NewRecorder()
-	a.listMemories(foreignKBWithLocalProject, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+localProject+"&knowledge_base_id="+foreignKB, nil))
+	a.listMemories(foreignKBWithLocalProject, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+localProject+"&knowledge_base_id=missing-kb", nil))
 	if foreignKBWithLocalProject.Code != http.StatusNotFound {
-		t.Fatalf("foreign knowledge base list status=%d body=%s", foreignKBWithLocalProject.Code, foreignKBWithLocalProject.Body)
+		t.Fatalf("missing shared library list status=%d body=%s", foreignKBWithLocalProject.Code, foreignKBWithLocalProject.Body)
 	}
 
 	get := callManagement(t, a, http.MethodGet, "/api/v1/memories/foreign-memory?project_id="+localProject, "", a.getMemory, false)

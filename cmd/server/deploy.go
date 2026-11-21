@@ -205,19 +205,27 @@ func validateMemDockDatabase(db *sql.DB) error {
 		return fmt.Errorf("integrity check failed: %s", integrity)
 	}
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version < 1 || version > 5 {
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version < 1 || version > 6 {
 		return fmt.Errorf("unsupported schema version %d", version)
 	}
 	required := map[string][]string{
-		"projects":        {"id", "name", "created_at"},
-		"repositories":    {"canonical", "project_id"},
-		"knowledge_bases": {"id", "project_id", "name", "kind", "is_default", "created_at"},
-		"memories":        {"id", "knowledge_base_id", "title", "content", "category", "status", "created_at", "updated_at"},
-		"memories_fts":    {"title", "content"},
+		"projects":     {"id", "name", "created_at"},
+		"repositories": {"canonical", "project_id"},
+		"memories_fts": {"title", "content"},
 	}
 	objects := map[string]string{
 		"memories_ai": "trigger", "memories_ad": "trigger", "memories_au": "trigger",
-		"project_default_kb": "index", "memories_kb_status": "index",
+	}
+	if version >= 6 {
+		required["knowledge_bases"] = []string{"id", "name", "created_at"}
+		required["memories"] = []string{"id", "project_id", "knowledge_base_id", "title", "content", "category", "status", "created_at", "updated_at"}
+		objects["memories_project_status"] = "index"
+		objects["memories_kb_status"] = "index"
+	} else {
+		required["knowledge_bases"] = []string{"id", "project_id", "name", "kind", "is_default", "created_at"}
+		required["memories"] = []string{"id", "knowledge_base_id", "title", "content", "category", "status", "created_at", "updated_at"}
+		objects["project_default_kb"] = "index"
+		objects["memories_kb_status"] = "index"
 	}
 	if version >= 3 {
 		required["memory_tags"] = []string{"memory_id", "tag"}
@@ -267,6 +275,23 @@ func validateMemDockDatabase(db *sql.DB) error {
 			if !found[column] {
 				return fmt.Errorf("required table/column missing: %s.%s", table, column)
 			}
+		}
+	}
+	if version >= 6 {
+		var memoriesSQL string
+		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='memories'`).Scan(&memoriesSQL); err != nil {
+			return fmt.Errorf("inspect memories ownership constraint: %w", err)
+		}
+		memoriesSQL = strings.Join(strings.Fields(strings.ToLower(memoriesSQL)), " ")
+		if !strings.Contains(memoriesSQL, `check ((project_id is not null and knowledge_base_id is null) or (project_id is null and knowledge_base_id is not null))`) {
+			return fmt.Errorf("memory ownership constraint is missing")
+		}
+		var invalidOwnership int
+		if err := db.QueryRow(`SELECT count(*) FROM memories WHERE (project_id IS NULL)=(knowledge_base_id IS NULL)`).Scan(&invalidOwnership); err != nil {
+			return err
+		}
+		if invalidOwnership != 0 {
+			return fmt.Errorf("memories must belong to exactly one project or shared knowledge base")
 		}
 	}
 	return nil

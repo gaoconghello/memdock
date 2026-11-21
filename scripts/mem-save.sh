@@ -85,7 +85,7 @@ else
   target_name=$project_name
   target_id='(new project)'
 fi
-printf 'Directory: %s\nTarget project: %s\nProject ID: %s\nKnowledge base: %s\nTitle: %s\nContent:\n%s\nTags: %s\n' "$binding_path" "$target_name" "$target_id" "${MEMDOCK_KNOWLEDGE_BASE_ID:-(project default)}" "$title" "$content" "$tags_json" >&2
+printf 'Directory: %s\nTarget project: %s\nProject ID: %s\nMemory target: %s\nTitle: %s\nContent:\n%s\nTags: %s\n' "$binding_path" "$target_name" "$target_id" "${MEMDOCK_KNOWLEDGE_BASE_ID:-(current project)}" "$title" "$content" "$tags_json" >&2
 if [ -t 0 ]; then
   printf 'Save this memory? Type y to confirm: ' >&2
   IFS= read -r answer
