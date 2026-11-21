@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+certs
+memdock-server
+plans
+*.db
+*.db-shm
+*.db-wal

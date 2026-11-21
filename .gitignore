@@ -1,0 +1,7 @@
+memdock.db
+.env
+/certs/
+memdock.db-shm
+memdock.db-wal
+/server
+/memdock-server

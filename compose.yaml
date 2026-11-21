@@ -1,0 +1,33 @@
+services:
+  memdock:
+    build: .
+    image: memdock:local
+    restart: unless-stopped
+    environment:
+      MEMDOCK_ADDR: :8080
+      MEMDOCK_DB_PATH: /data/memdock.db
+      MEMDOCK_MODE: ${MEMDOCK_MODE:-private}
+      MEMDOCK_APPROVAL_KEY: ${MEMDOCK_APPROVAL_KEY:-}
+      MEMDOCK_READ_TOKEN: ${MEMDOCK_READ_TOKEN:-}
+      MEMDOCK_WRITE_TOKEN: ${MEMDOCK_WRITE_TOKEN:-}
+      MEMDOCK_APPROVAL_PUBLIC_KEY: ${MEMDOCK_APPROVAL_PUBLIC_KEY:-}
+      MEMDOCK_PROJECT_ACL_FILE: /config/project-acl.json
+      MEMDOCK_TRUST_PROXY_TLS: ${MEMDOCK_TRUST_PROXY_TLS:-false}
+      MEMDOCK_TRUST_PROXY_CIDRS: ${MEMDOCK_TRUST_PROXY_CIDRS:-}
+      MEMDOCK_TLS_CERT: ${MEMDOCK_TLS_CERT:-}
+      MEMDOCK_TLS_KEY: ${MEMDOCK_TLS_KEY:-}
+    volumes:
+      - memdock-data:/data
+      - ${MEMDOCK_CONFIG_DIR:-./config}:/config:ro
+      - ${MEMDOCK_TLS_DIR:-./certs}:/certs:ro
+    ports:
+      - "127.0.0.1:${MEMDOCK_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "memdock-server", "healthcheck"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  memdock-data:
