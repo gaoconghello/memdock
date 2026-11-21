@@ -68,6 +68,9 @@ func rpcError(id any, code int, message string) map[string]any {
 
 func mcpTools() []map[string]any {
 	obj := func(props map[string]any, required ...string) map[string]any {
+		if required == nil {
+			required = []string{}
+		}
 		return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}
 	}
 	str := map[string]any{"type": "string"}
@@ -95,7 +98,7 @@ func mcpTools() []map[string]any {
 		{"name": "project_info", "description": "Get project details including bound repositories.", "inputSchema": obj(props("project_id"), "project_id")},
 		{"name": "project_list", "description": "List accessible projects, including candidates for a local folder without a Git remote.", "inputSchema": obj(map[string]any{})},
 		{"name": "project_lookup", "description": "Read-only lookup by client-provided Git remote or project ID; does not create or bind projects.", "inputSchema": obj(props("repository", "project_id"))},
-		{"name": "project_resolve", "description": "Explicitly create a project or bind a repository after user confirmation. Private mode requires write authorization; Secure mode returns an approval request for an admin. Supply the client's repository or project name; the server cannot inspect the client's working directory.", "inputSchema": obj(withSignature(props("repository", "name", "project_id")))},
+		{"name": "project_resolve", "description": "After user confirmation, create a project using name and/or repository, omitting project_id; the server generates and returns the ID. To select an existing project or bind its repository, provide its existing project_id. Private mode requires write authorization; Secure mode returns an approval request for an admin. The server cannot inspect the client's working directory.", "inputSchema": obj(withSignature(props("repository", "name", "project_id")))},
 	}
 }
 

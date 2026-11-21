@@ -41,6 +41,28 @@ func TestMCPStreamableHTTPToolsAndRead(t *testing.T) {
 	listReq.Header.Set("Accept", "application/json")
 	listRec := httptest.NewRecorder()
 	a.mcp(listRec, listReq)
+	var toolList struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				InputSchema struct {
+					Required json.RawMessage `json:"required"`
+				} `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &toolList); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range toolList.Result.Tools {
+		if string(tool.InputSchema.Required) == "null" || len(tool.InputSchema.Required) == 0 {
+			t.Fatalf("%s required must be an array: %s", tool.Name, tool.InputSchema.Required)
+		}
+		var required []string
+		if err := json.Unmarshal(tool.InputSchema.Required, &required); err != nil {
+			t.Fatalf("%s required: %v", tool.Name, err)
+		}
+	}
 	for _, tool := range []string{`"name":"memory_search"`, `"name":"memory_save"`, `"name":"memory_list"`, `"name":"memory_update"`, `"name":"memory_delete"`, `"name":"project_info"`, `"name":"project_list"`, `"name":"project_lookup"`, `"name":"project_resolve"`} {
 		if !strings.Contains(listRec.Body.String(), tool) {
 			t.Fatalf("missing %s from tools/list: %s", tool, listRec.Body)
@@ -129,6 +151,47 @@ func TestMCPStreamableHTTPToolsAndRead(t *testing.T) {
 	listed := call("memory_list", `{"project_id":"`+project.ID+`"}`)
 	if !strings.Contains(listed.Body.String(), `"knowledge_base_name":"默认项目库"`) || !strings.Contains(listed.Body.String(), `"knowledge_base_type":"project"`) {
 		t.Fatalf("MCP list omitted source: %s", listed.Body)
+	}
+}
+
+func TestMCPProjectCreateAndSaveWithWriteSecret(t *testing.T) {
+	a := newMCPTestApp(t)
+	a.writeSecret = []byte(strings.Repeat("s", 32))
+	call := func(name, args string) (map[string]json.RawMessage, bool) {
+		t.Helper()
+		body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + name + `","arguments":` + args + `}}`
+		req := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("X-MemDock-Write-Secret", string(a.writeSecret))
+		rec := httptest.NewRecorder()
+		a.mcp(rec, req)
+		var response struct {
+			Result struct {
+				Structured map[string]json.RawMessage `json:"structuredContent"`
+				IsError    bool                       `json:"isError"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response.Result.Structured, response.Result.IsError
+	}
+	project, failed := call("project_resolve", `{"name":"raspberry-pi-gateway"}`)
+	var id string
+	if failed || json.Unmarshal(project["project_id"], &id) != nil || !strings.HasPrefix(id, "prj_") {
+		t.Fatalf("create project: %s", project)
+	}
+	_, failed = call("memory_save", `{"project_id":"`+id+`","title":"test","content":"saved"}`)
+	if failed {
+		t.Fatal("save failed")
+	}
+	var count int
+	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE title='test'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("memory count %d: %v", count, err)
+	}
+	_, failed = call("project_resolve", `{"project_id":"missing","name":"new"}`)
+	if !failed {
+		t.Fatal("unknown existing project ID must be rejected")
 	}
 }
 
