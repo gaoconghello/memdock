@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWebEditorKeepsEditableTagsAndBlocksInsecureSigning(t *testing.T) {
+func TestWebEditorUsesPrivateAdminSessionAndKeepsSecureApproval(t *testing.T) {
 	rec := httptest.NewRecorder()
 	(&app{}).webIndex(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
@@ -16,9 +16,10 @@ func TestWebEditorKeepsEditableTagsAndBlocksInsecureSigning(t *testing.T) {
 	for _, required := range []string{
 		"标签（逗号分隔，可留空清除）",
 		"tags:tags.split(',').map(x=>x.trim()).filter(Boolean)",
-		"!window.isSecureContext||!window.crypto?.subtle",
-		"已阻止密钥输入和写入",
-		"window.crypto.subtle.importKey",
+		"Private 管理写入使用 HttpOnly 会话及 CSRF 防护",
+		"MEMDOCK_ADMIN_PASSWORD",
+		"X-MemDock-CSRF",
+		"admin-change-password",
 		"state.mode==='secure'",
 		"生成此操作的审批请求文件",
 		"approve-request memdock-approval-request.json",
@@ -32,5 +33,8 @@ func TestWebEditorKeepsEditableTagsAndBlocksInsecureSigning(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), required) {
 			t.Errorf("web editor missing expected regression guard %q", required)
 		}
+	}
+	if strings.Contains(rec.Body.String(), "window.crypto.subtle") || strings.Contains(rec.Body.String(), "输入 MEMDOCK_APPROVAL_KEY") {
+		t.Error("Private Console still depends on browser HMAC signing")
 	}
 }

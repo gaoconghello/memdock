@@ -30,7 +30,7 @@ MEMDOCK_MODE=private MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 - 管理界面：`http://localhost:8080/`
 - MCP 端点：`http://localhost:8080/mcp`
 
-Private 模式为默认模式，无需额外配置，但不提供应用层读认证——必须限制在可信私有网络内使用。
+Private 模式为默认模式，API/MCP 自动化契约保持不变；Web Console 的管理写入需管理员会话。首次启动前设置 `MEMDOCK_ADMIN_PASSWORD`（至少 12 位），服务将其安全哈希持久化到 SQLite；之后可在 Console 修改密码，修改会使所有旧会话失效。Private API/MCP 仍不提供读认证，必须限制在可信私有网络内。普通 HTTP 不加密密码、Cookie 会话或数据；应配置 MemDock 直连 HTTPS（`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`）或仅通过可信加密网络访问，不要在不可信网络使用 HTTP。Private 模式不支持由反向代理终止 TLS；代理 TLS 终止仅支持 Secure 模式。
 
 ## 使用示例
 
@@ -39,6 +39,7 @@ Private 模式为默认模式，无需额外配置，但不提供应用层读认
 **1. 启动服务**
 
 ```sh
+: "${MEMDOCK_ADMIN_PASSWORD:?请先安全设置至少 12 位管理员密码}"
 MEMDOCK_MODE=private MEMDOCK_APPROVAL_KEY=$(openssl rand -hex 32) \
 MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 ```
@@ -109,6 +110,7 @@ Secure 模式步骤相同，区别在于写入脚本/MCP 工具只生成审批�
 | `MEMDOCK_ADDR` | 通用 | 监听地址，默认 `:8080`。 |
 | `MEMDOCK_DB_PATH` | 通用 | SQLite 数据库路径，默认 `memdock.db`。 |
 | `MEMDOCK_MODE` | 通用 | `private`（默认）或 `secure`。 |
+| `MEMDOCK_ADMIN_PASSWORD` | private | 首次初始化 Private Console 管理员密码，至少 12 个字符；仅在数据库尚无管理员凭据时生效。妥善通过部署环境注入，勿提交或记录。密码哈希和管理员会话持久化于 SQLite。 |
 | `MEMDOCK_APPROVAL_KEY` | private | 写接口 HMAC 密钥，至少 32 字节；用于请求完整性和防重放，不是用户授权。 |
 | `MEMDOCK_WRITE_SECRET` | private | 可选，至少 32 字节。设置后客户端可用静态 `X-MemDock-Write-Secret` 请求头写入，替代逐请求 HMAC 签名——持有该值即拥有写入能力，请当作写入凭据保管。Secure 模式忽略此值。 |
 | `MEMDOCK_READ_TOKEN` | secure | 必填，至少 32 字节，仅允许读操作。 |
@@ -116,7 +118,9 @@ Secure 模式步骤相同，区别在于写入脚本/MCP 工具只生成审批�
 | `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | 必填，Ed25519 32 字节公钥的十六进制字符串。服务不持有审批私钥。 |
 | `MEMDOCK_PROJECT_ACL_FILE` | secure | 必填，项目访问控制 JSON 文件；凭据只以 SHA-256 摘要登记，未配置、未列入 ACL 或未授权项目均默认拒绝。 |
 | `MEMDOCK_TLS_CERT`、`MEMDOCK_TLS_KEY` | 通用 | 成对配置时服务直接提供 HTTPS。 |
-| `MEMDOCK_TRUST_PROXY_TLS` | secure | `true` 表示只信任代理 TLS 模式；必须同时配置 `MEMDOCK_TRUST_PROXY_CIDRS`（逗号分隔 CIDR）。服务校验连接源 IP 位于可信 CIDR 且 `X-Forwarded-Proto` 精确为 `https`。代理仍须清理客户端转发头并重写；不能让不可信来源直接访问后端端口。 |
+| `MEMDOCK_TRUST_PROXY_TLS` | secure | `true` 表示只信任代理 TLS 模式；必须同时配置 `MEMDOCK_TRUST_PROXY_CIDRS`（逗号分隔 CIDR）。服务校验连接源 IP 位于可信 CIDR 且 `X-Forwarded-Proto` 精确为 `https`。代理仍须清理客户端转发头并重写；不能让不可信来源直接访问后端端口。Private 模式不支持代理终止 TLS。 |
+
+Private Web Console 使用随机会话 Cookie（HttpOnly、SameSite=Strict；HTTPS 时启用 Secure）和 CSRF token。管理员会话有效期为 12 小时；退出、到期或修改密码后失效。若数据库已有管理员密码，更改环境变量不会重置密码，需登录 Console 修改。首次密码尚未初始化时，Console 会提示设置环境变量并重启服务。管理员登录只授予 Private Web Console 会话写入，不改变 Secure 模式审批，也不替代既有 HMAC/静态写入密钥自动化接口。
 
 ### Secure 模式授权模型
 
@@ -148,13 +152,14 @@ Secure Web/Skill/MCP 审批文件链路提供可执行请求生成及独立 CLI 
 
 ## Docker / Compose
 
-仓库提供 [.env.example](.env.example) 和 [ACL 示例](config/project-acl.example.json)。Compose 会自动读取根目录的 `.env`；复制示例并填写实际值，切勿提交凭据。Private 模式不需要 ACL 文件。
+仓库提供 [.env.example](.env.example) 和 [ACL 示例](config/project-acl.example.json)。Compose 会自动读取根目录的 `.env` 并将 `MEMDOCK_ADMIN_PASSWORD` 传入 Private 服务；复制示例后，在首次启动前设置强管理员密码，切勿提交凭据。密码以哈希形式持久化到 SQLite，因此初始化后可从环境中移除该值而不影响登录。Private 模式不需要 ACL 文件。
 
 ```sh
 # Private 模式示例：生成仅本机可读的 HMAC 配置；妥善保管并勿提交。
 umask 077
 cp .env.example .env
-# 编辑 .env，将 MEMDOCK_APPROVAL_KEY 设为以下命令生成的值：
+# 编辑 .env：设置强管理员密码（至少 12 个字符），
+# 并将 MEMDOCK_APPROVAL_KEY 设为以下命令生成的值：
 openssl rand -hex 32
 docker compose up -d --build
 docker compose ps
@@ -163,7 +168,7 @@ docker compose logs -f memdock
 
 Secure 模式还需复制 `config/project-acl.example.json` 为 `config/project-acl.json`，替换其中的摘要和项目 ID，并按下方步骤完成 token、公钥及 TLS 配置。示例中的占位符不能直接用于启动。直接使用 `docker run --env-file .env` 时，文件中的服务端环境变量会传入容器；Compose 专用的端口及挂载目录变量仍需通过 `-p`、`-v` 等参数单独配置。
 
-默认仅发布到宿主机 `127.0.0.1:8080`，容器以 UID/GID 10001 非 root 运行，SQLite 位于持久卷 `memdock-data`。部署到 Tailnet 可使用 `tailscale serve` 将本机端口以受信任 HTTPS 暴露；不要直接将默认 HTTP 端口发布到公网。
+默认仅发布到宿主机 `127.0.0.1:8080`，容器以 UID/GID 10001 非 root 运行，SQLite 位于持久卷 `memdock-data`。Private 模式应配置 MemDock 直连 TLS，或仅通过 Tailnet 等可信加密网络访问其 HTTP 监听端口；不要对 Private Console 使用 `tailscale serve` 或其他 TLS 终止代理，因为 Private 模式只在 TLS 直达服务端时接受 HTTPS Origin 并设置 Secure Cookie。Secure 模式支持下文所述的可信 TLS 终止代理。不要将默认 HTTP 端口直接发布到公网。
 
 ### Secure 模式 TLS 配置
 

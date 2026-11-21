@@ -197,7 +197,7 @@ func validateMemDockDatabase(db *sql.DB) error {
 		return fmt.Errorf("integrity check failed: %s", integrity)
 	}
 	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version < 1 || version > 3 {
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version < 1 || version > 4 {
 		return fmt.Errorf("unsupported schema version %d", version)
 	}
 	required := map[string][]string{
@@ -220,6 +220,11 @@ func validateMemDockDatabase(db *sql.DB) error {
 		required["project_operations"] = []string{"id", "source_project_id", "target_project_id", "action", "created_at"}
 		objects["memory_tags_tag"] = "index"
 		objects["memory_revisions_memory"] = "index"
+	}
+	if version >= 4 {
+		required["admin_credentials"] = []string{"id", "password_hash"}
+		required["admin_sessions"] = []string{"token_hash", "csrf_hash", "csrf_token", "expires_at"}
+		objects["admin_sessions_expiry"] = "index"
 	}
 	for name, kind := range objects {
 		var actualType string

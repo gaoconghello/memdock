@@ -30,7 +30,7 @@ Once running:
 - Management UI: `http://localhost:8080/`
 - MCP endpoint: `http://localhost:8080/mcp`
 
-Private mode is the default and requires no further configuration, but it provides no application-layer read authentication — keep it on a trusted private network.
+Private mode is the default and keeps existing API/MCP automation contracts unchanged. Web Console management writes require an administrator session. Before first startup, set `MEMDOCK_ADMIN_PASSWORD` (at least 12 characters); the server stores a password hash in SQLite, and the password can later be changed in the Console. Private API/MCP reads remain unauthenticated, so keep the service on a trusted private network. Ordinary HTTP does not encrypt passwords, session cookies, or data: use direct HTTPS on MemDock (`MEMDOCK_TLS_CERT`/`MEMDOCK_TLS_KEY`) or a trusted encrypted network; never use HTTP on an untrusted network. Private mode does not support TLS terminated at a reverse proxy; proxy-terminated TLS is supported only in Secure mode.
 
 ## Usage Example
 
@@ -39,6 +39,7 @@ A complete round trip in Private mode: start the server, save a decision from an
 **1. Start the server**
 
 ```sh
+: "${MEMDOCK_ADMIN_PASSWORD:?Set a strong administrator password of at least 12 characters first}"
 MEMDOCK_MODE=private MEMDOCK_APPROVAL_KEY=$(openssl rand -hex 32) \
 MEMDOCK_DB_PATH=./data/memdock.db go run ./cmd/server
 ```
@@ -109,6 +110,7 @@ All configuration is done through environment variables:
 | `MEMDOCK_ADDR` | all | Listen address, default `:8080`. |
 | `MEMDOCK_DB_PATH` | all | SQLite database path, default `memdock.db`. |
 | `MEMDOCK_MODE` | all | `private` (default) or `secure`. |
+| `MEMDOCK_ADMIN_PASSWORD` | private | Initial Private Console administrator password, at least 12 characters; only used when the database has no administrator credential. Inject via deployment environment; do not commit or log it. Password hash and sessions persist in SQLite. |
 | `MEMDOCK_APPROVAL_KEY` | private | HMAC key for write endpoints, at least 32 bytes; protects request integrity and prevents replay. It is not user authorization. |
 | `MEMDOCK_WRITE_SECRET` | private | Optional. At least 32 bytes. When set, clients may write with a static `X-MemDock-Write-Secret` header instead of per-request HMAC signatures — anyone holding this value can write, so treat it as a write credential. Ignored in secure mode. |
 | `MEMDOCK_READ_TOKEN` | secure | Required. At least 32 bytes; read operations only. |
@@ -116,7 +118,9 @@ All configuration is done through environment variables:
 | `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | Required. Hex-encoded Ed25519 32-byte public key. The service never holds the approval private key. |
 | `MEMDOCK_PROJECT_ACL_FILE` | secure | Required. Project ACL JSON file; credentials are registered only as SHA-256 digests. Missing, unlisted, or unauthorized projects are denied by default. |
 | `MEMDOCK_TLS_CERT`, `MEMDOCK_TLS_KEY` | all | When set as a pair, the service serves HTTPS directly. |
-| `MEMDOCK_TRUST_PROXY_TLS` | secure | `true` to trust proxy-terminated TLS; must also set `MEMDOCK_TRUST_PROXY_CIDRS` (comma-separated CIDRs). The service verifies that the connection source IP is inside the trusted CIDRs and that `X-Forwarded-Proto` is exactly `https`. The proxy must still strip client-supplied forwarding headers and rewrite them; never let untrusted sources reach the backend port directly. |
+| `MEMDOCK_TRUST_PROXY_TLS` | secure | `true` to trust proxy-terminated TLS; must also set `MEMDOCK_TRUST_PROXY_CIDRS` (comma-separated CIDRs). The service verifies that the connection source IP is inside the trusted CIDRs and that `X-Forwarded-Proto` is exactly `https`. The proxy must still strip client-supplied forwarding headers and rewrite them; never let untrusted sources reach the backend port directly. Private mode does not support TLS termination at a proxy. |
+
+The Private Web Console uses a random HttpOnly, SameSite=Strict session cookie (Secure on direct HTTPS) and CSRF tokens. Sessions expire after 12 hours and are invalidated by logout or password change. Once the database has an administrator password, changing the environment variable does not reset it; change it in the Console instead. If no password is initialized, the Console prompts the operator to set the variable and restart. This session grants writes only through the Private Web Console; it does not change Secure-mode approval or replace existing HMAC/static-secret automation interfaces.
 
 ### Secure mode authorization model
 
@@ -148,13 +152,14 @@ The Secure Web/Skill/MCP approval-file chain provides executable request generat
 
 ## Docker / Compose
 
-The repository ships [.env.example](.env.example) and an [ACL example](config/project-acl.example.json). Compose reads the root `.env` automatically; copy the examples and fill in real values, and never commit credentials. Private mode needs no ACL file.
+The repository ships [.env.example](.env.example) and an [ACL example](config/project-acl.example.json). Compose reads the root `.env` automatically and passes `MEMDOCK_ADMIN_PASSWORD` to the Private server; copy the example, set a strong initial password before first startup, and never commit credentials. The password is persisted as a hash in SQLite, so removing the environment value afterward does not disable login. Private mode needs no ACL file.
 
 ```sh
 # Private mode example: generate host-local HMAC config; keep it safe and uncommitted.
 umask 077
 cp .env.example .env
-# Edit .env and set MEMDOCK_APPROVAL_KEY to the value produced by:
+# Edit .env: set MEMDOCK_ADMIN_PASSWORD to a strong password (12+ characters),
+# and set MEMDOCK_APPROVAL_KEY to the value produced by:
 openssl rand -hex 32
 docker compose up -d --build
 docker compose ps
@@ -163,7 +168,7 @@ docker compose logs -f memdock
 
 Secure mode additionally copies `config/project-acl.example.json` to `config/project-acl.json`, replaces the digests and project IDs, and completes the token, public key, and TLS configuration as described below. The placeholders in the examples must not be used to start the service. When using `docker run --env-file .env` directly, server environment variables in the file pass into the container; Compose-specific port and mount variables still need separate `-p`, `-v`, and similar flags.
 
-By default the service is published only to the host's `127.0.0.1:8080`, the container runs as non-root UID/GID 10001, and SQLite lives in the persistent volume `memdock-data`. For a Tailnet deployment, use `tailscale serve` to expose the local port as trusted HTTPS; do not publish the default HTTP port to the public internet.
+By default the service is published only to the host's `127.0.0.1:8080`, the container runs as non-root UID/GID 10001, and SQLite lives in the persistent volume `memdock-data`. For Private mode, use direct TLS configured on MemDock or access its HTTP listener only through a trusted encrypted network such as the Tailnet; do not use `tailscale serve` or another TLS-terminating proxy for the Private Console, because Private mode accepts HTTPS origins/cookies only when TLS reaches the server directly. Secure mode supports a trusted TLS-terminating proxy as described below. Never publish the default HTTP port to the public internet.
 
 ### TLS options for Secure mode
 

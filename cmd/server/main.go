@@ -135,9 +135,21 @@ func main() {
 	if err := migrate(ctx, db); err != nil {
 		log.Fatal(err)
 	}
+	if mode == "private" {
+		if password := os.Getenv("MEMDOCK_ADMIN_PASSWORD"); password != "" && !validAdminPassword(password) {
+			log.Fatal("MEMDOCK_ADMIN_PASSWORD must be at least 12 characters")
+		}
+		if err := (&app{db: db}).initializeAdmin(ctx, os.Getenv("MEMDOCK_ADMIN_PASSWORD")); err != nil {
+			log.Fatal("could not initialize administrator credential")
+		}
+	}
 	a := &app{db: db, approvalKey: []byte(os.Getenv("MEMDOCK_APPROVAL_KEY")), writeSecret: []byte(os.Getenv("MEMDOCK_WRITE_SECRET")), approvalPublicKey: ed25519.PublicKey(publicKey), trustedProxyCIDRs: trustedProxyCIDRs, projectGrants: projectGrants, mode: mode}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
+	mux.HandleFunc("GET /api/v1/admin/status", a.adminStatus)
+	mux.HandleFunc("POST /api/v1/admin/login", a.adminLogin)
+	mux.HandleFunc("POST /api/v1/admin/logout", a.adminLogout)
+	mux.HandleFunc("POST /api/v1/admin/password", a.adminChangePassword)
 	mux.HandleFunc("GET /api/v1/backup", a.backup)
 	mux.HandleFunc("GET /", a.webIndex)
 	mux.HandleFunc("GET /api/v1/status", a.systemStatus)
@@ -167,7 +179,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/memories/{id}/permanent", a.permanentlyDeleteMemory)
 	mux.HandleFunc("GET /api/v1/memories/{id}/history", a.memoryHistory)
 	log.Printf("MemDock listening on %s (mode=%s)", addr, mode)
-	server := &http.Server{Addr: addr, Handler: a.authenticate(a.authorizeProjectAccess(mux)), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Addr: addr, Handler: a.authenticate(a.adminSessionMiddleware(a.authorizeProjectAccess(mux))), ReadHeaderTimeout: 10 * time.Second}
 	if tlsCert != "" {
 		log.Fatal(server.ListenAndServeTLS(tlsCert, tlsKey))
 	}
@@ -186,7 +198,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 3 {
+	if version > 4 {
 		return fmt.Errorf("database schema version %d is newer than supported", version)
 	}
 	if version == 0 {
@@ -255,6 +267,29 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			}
 		}
 		if _, err := tx.ExecContext(ctx, "PRAGMA user_version=3"); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		version = 3
+	}
+	if version == 3 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, statement := range []string{
+			`CREATE TABLE admin_credentials (id INTEGER PRIMARY KEY CHECK(id=1), password_hash TEXT NOT NULL)`,
+			`CREATE TABLE admin_sessions (token_hash TEXT PRIMARY KEY, csrf_hash TEXT NOT NULL, csrf_token TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
+			`CREATE INDEX admin_sessions_expiry ON admin_sessions(expires_at)`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "PRAGMA user_version=4"); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -503,6 +538,11 @@ func nullString(s string) any {
 
 // verifyWriteSignature enforces independent Ed25519 approval in secure mode and HMAC integrity in private mode.
 func (a *app) verifyWriteSignature(w http.ResponseWriter, r *http.Request) bool {
+	if a.mode == "private" {
+		if _, ok := sessionFromRequest(r); ok {
+			return true
+		}
+	}
 	if a.mode == "secure" && len(a.approvalPublicKey) != ed25519.PublicKeySize {
 		writeError(w, 503, "independent approval public key is not configured")
 		return false
