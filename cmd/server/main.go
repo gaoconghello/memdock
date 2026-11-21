@@ -523,8 +523,8 @@ func (a *app) verifyWriteSignature(w http.ResponseWriter, r *http.Request) bool 
 		}
 	} else if len(parts) != 3 {
 		// Private-mode alternative: MEMDOCK_WRITE_SECRET enables a static
-		// X-MemDock-Write-Key header instead of per-request HMAC signing.
-		if len(a.writeSecret) >= 32 && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-MemDock-Write-Key")), a.writeSecret) == 1 {
+		// X-MemDock-Write-Secret header instead of per-request HMAC signing.
+		if len(a.writeSecret) >= 32 && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-MemDock-Write-Secret")), a.writeSecret) == 1 {
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			return true
 		}

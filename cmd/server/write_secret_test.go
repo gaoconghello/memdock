@@ -36,7 +36,7 @@ func TestPrivateStaticWriteSecretAcceptsKeyHeader(t *testing.T) {
 	verify := func(raw, writeKey string) (bool, int, string) {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(raw))
 		if writeKey != "" {
-			r.Header.Set("X-MemDock-Write-Key", writeKey)
+			r.Header.Set("X-MemDock-Write-Secret", writeKey)
 		}
 		w := httptest.NewRecorder()
 		ok := a.verifyWriteSignature(w, r)
@@ -81,7 +81,7 @@ func TestSecureModeIgnoresStaticWriteSecret(t *testing.T) {
 	}
 	a := &app{db: db, approvalKey: []byte(strings.Repeat("h", 32)), writeSecret: []byte(strings.Repeat("s", 32)), approvalPublicKey: pub, mode: "secure"}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/memories", strings.NewReader(`{"title":"x"}`))
-	r.Header.Set("X-MemDock-Write-Key", string(a.writeSecret))
+	r.Header.Set("X-MemDock-Write-Secret", string(a.writeSecret))
 	w := httptest.NewRecorder()
 	if a.verifyWriteSignature(w, r) {
 		t.Fatalf("static key must not authorize Secure writes")
@@ -108,7 +108,7 @@ func TestMCPStaticWriteKeyHeaderEnablesSave(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
 		req.Header.Set("Accept", "application/json")
 		if withHeader {
-			req.Header.Set("X-MemDock-Write-Key", string(a.writeSecret))
+			req.Header.Set("X-MemDock-Write-Secret", string(a.writeSecret))
 		}
 		rec := httptest.NewRecorder()
 		a.mcp(rec, req)

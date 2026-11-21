@@ -110,7 +110,7 @@ All configuration is done through environment variables:
 | `MEMDOCK_DB_PATH` | all | SQLite database path, default `memdock.db`. |
 | `MEMDOCK_MODE` | all | `private` (default) or `secure`. |
 | `MEMDOCK_APPROVAL_KEY` | private | HMAC key for write endpoints, at least 32 bytes; protects request integrity and prevents replay. It is not user authorization. |
-| `MEMDOCK_WRITE_SECRET` | private | Optional. At least 32 bytes. When set, clients may write with a static `X-MemDock-Write-Key` header instead of per-request HMAC signatures — anyone holding this value can write, so treat it as a write credential. Ignored in secure mode. |
+| `MEMDOCK_WRITE_SECRET` | private | Optional. At least 32 bytes. When set, clients may write with a static `X-MemDock-Write-Secret` header instead of per-request HMAC signatures — anyone holding this value can write, so treat it as a write credential. Ignored in secure mode. |
 | `MEMDOCK_READ_TOKEN` | secure | Required. At least 32 bytes; read operations only. |
 | `MEMDOCK_WRITE_TOKEN` | secure | Required. At least 32 bytes and must differ from the read token; held only by the approval operator, authenticates write requests. |
 | `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | Required. Hex-encoded Ed25519 32-byte public key. The service never holds the approval private key. |
@@ -224,7 +224,7 @@ Health check: `GET /healthz`; management UI: `/`; MCP: `/mcp`. In Secure mode, w
 
 ### MCP client configuration
 
-Point the MCP client at the Streamable HTTP endpoint `/mcp` on the same server. Nothing needs to be installed client-side — the MemDock server itself is the MCP server. Private mode needs no token; Secure mode sends the agent's read token as Bearer auth. In Private mode you can also let the client write directly: set `MEMDOCK_WRITE_SECRET` on the server and pass it as an `X-MemDock-Write-Key` header.
+Point the MCP client at the Streamable HTTP endpoint `/mcp` on the same server. Nothing needs to be installed client-side — the MemDock server itself is the MCP server. Private mode needs no token; Secure mode sends the agent's read token as Bearer auth. In Private mode you can also let the client write directly: set `MEMDOCK_WRITE_SECRET` on the server and pass it as an `X-MemDock-Write-Secret` header.
 
 Pi:
 
@@ -243,7 +243,7 @@ For Private-mode writes via MCP, add the write key header in `~/.pi/agent/mcp.js
   "mcpServers": {
     "memdock": {
       "url": "http://100.79.6.101:18080/mcp",
-      "headers": { "X-MemDock-Write-Key": "<MEMDOCK_WRITE_SECRET>" }
+      "headers": { "X-MemDock-Write-Secret": "<MEMDOCK_WRITE_SECRET>" }
     }
   }
 }
@@ -255,7 +255,7 @@ Codex (`~/.codex/config.toml` for all projects, or `.codex/config.toml` in a tru
 [mcp_servers.memdock]
 url = "http://127.0.0.1:8080/mcp"
 # Private-mode writes without per-request HMAC:
-http_headers = { X-MemDock-Write-Key = "<MEMDOCK_WRITE_SECRET>" }
+http_headers = { X-MemDock-Write-Secret = "<MEMDOCK_WRITE_SECRET>" }
 # Secure mode only:
 # http_headers = { Authorization = "Bearer <READ_TOKEN>" }
 ```

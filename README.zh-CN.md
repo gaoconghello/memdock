@@ -110,7 +110,7 @@ Secure 模式步骤相同，区别在于写入脚本/MCP 工具只生成审批�
 | `MEMDOCK_DB_PATH` | 通用 | SQLite 数据库路径，默认 `memdock.db`。 |
 | `MEMDOCK_MODE` | 通用 | `private`（默认）或 `secure`。 |
 | `MEMDOCK_APPROVAL_KEY` | private | 写接口 HMAC 密钥，至少 32 字节；用于请求完整性和防重放，不是用户授权。 |
-| `MEMDOCK_WRITE_SECRET` | private | 可选，至少 32 字节。设置后客户端可用静态 `X-MemDock-Write-Key` 请求头写入，替代逐请求 HMAC 签名——持有该值即拥有写入能力，请当作写入凭据保管。Secure 模式忽略此值。 |
+| `MEMDOCK_WRITE_SECRET` | private | 可选，至少 32 字节。设置后客户端可用静态 `X-MemDock-Write-Secret` 请求头写入，替代逐请求 HMAC 签名——持有该值即拥有写入能力，请当作写入凭据保管。Secure 模式忽略此值。 |
 | `MEMDOCK_READ_TOKEN` | secure | 必填，至少 32 字节，仅允许读操作。 |
 | `MEMDOCK_WRITE_TOKEN` | secure | 必填，至少 32 字节且必须不同于读 token；仅审批操作者持有，可认证写请求。 |
 | `MEMDOCK_APPROVAL_PUBLIC_KEY` | secure | 必填，Ed25519 32 字节公钥的十六进制字符串。服务不持有审批私钥。 |
@@ -224,7 +224,7 @@ export MEMDOCK_URL=https://memdock.example
 
 ### MCP 客户端配置
 
-把 MCP 客户端指向同一服务的 Streamable HTTP 端点 `/mcp`。客户端侧无需安装任何东西——MemDock 服务本身即 MCP server。Private 模式无需 token；Secure 模式以 Bearer 方式携带 Agent 的读 token。Private 模式下也可让客户端直接写入：在服务端设置 `MEMDOCK_WRITE_SECRET`，客户端以 `X-MemDock-Write-Key` 请求头携带即可。
+把 MCP 客户端指向同一服务的 Streamable HTTP 端点 `/mcp`。客户端侧无需安装任何东西——MemDock 服务本身即 MCP server。Private 模式无需 token；Secure 模式以 Bearer 方式携带 Agent 的读 token。Private 模式下也可让客户端直接写入：在服务端设置 `MEMDOCK_WRITE_SECRET`，客户端以 `X-MemDock-Write-Secret` 请求头携带即可。
 
 Pi：
 
@@ -243,7 +243,7 @@ Private 模式下如需通过 MCP 直接写入，在 `~/.pi/agent/mcp.json` 中�
   "mcpServers": {
     "memdock": {
       "url": "http://100.79.6.101:18080/mcp",
-      "headers": { "X-MemDock-Write-Key": "<MEMDOCK_WRITE_SECRET>" }
+      "headers": { "X-MemDock-Write-Secret": "<MEMDOCK_WRITE_SECRET>" }
     }
   }
 }
@@ -255,7 +255,7 @@ Codex（`~/.codex/config.toml` 对所有项目生效，或项目根目录 `.code
 [mcp_servers.memdock]
 url = "http://127.0.0.1:8080/mcp"
 # Private 模式免逐请求 HMAC 直接写入：
-http_headers = { X-MemDock-Write-Key = "<MEMDOCK_WRITE_SECRET>" }
+http_headers = { X-MemDock-Write-Secret = "<MEMDOCK_WRITE_SECRET>" }
 # 仅 Secure 模式需要：
 # http_headers = { Authorization = "Bearer <READ_TOKEN>" }
 ```
