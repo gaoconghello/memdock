@@ -461,6 +461,9 @@ func (a *app) memoryTags(r *http.Request, id string) []string {
 			tags = append(tags, tag)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return []string{}
+	}
 	return tags
 }
 func cleanTags(tags []string) []string {
@@ -492,6 +495,10 @@ func saveRevision(tx *sql.Tx, id string) error {
 			return err
 		}
 		tags = append(tags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err
