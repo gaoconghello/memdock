@@ -493,8 +493,8 @@ func (a *app) updateMemory(w http.ResponseWriter, r *http.Request) {
 	if req.Category != nil {
 		category = strings.TrimSpace(*req.Category)
 	}
-	if title == "" || content == "" || len(title) > 300 || len(content) > 20000 {
-		writeError(w, 400, "title and content are required (title <= 300, content <= 20000 bytes)")
+	if title == "" || content == "" || len(title) > 300 || len(content) > maxMemoryContentBytes {
+		writeError(w, 400, fmt.Sprintf("title and content are required (title <= 300, content <= %d bytes)", maxMemoryContentBytes))
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)

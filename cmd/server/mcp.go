@@ -191,8 +191,8 @@ func validateMCPArguments(name string, args map[string]json.RawMessage) error {
 	case "memory_save":
 		if title, content := strings.TrimSpace(getString("title")), strings.TrimSpace(getString("content")); title == "" || content == "" {
 			return fmt.Errorf("title and content are required")
-		} else if len(title) > 300 || len(content) > 20000 {
-			return fmt.Errorf("title must be <= 300 bytes and content <= 20000 bytes")
+		} else if len(title) > 300 || len(content) > maxMemoryContentBytes {
+			return fmt.Errorf("title must be <= 300 bytes and content <= %d bytes", maxMemoryContentBytes)
 		}
 	case "memory_list":
 		if status := getString("status"); status != "" && status != "active" && status != "deleted" {
@@ -210,7 +210,7 @@ func validateMCPArguments(name string, args map[string]json.RawMessage) error {
 					}
 					max := 300
 					if key == "content" {
-						max = 20000
+						max = maxMemoryContentBytes
 					}
 					if len(value) > max {
 						return fmt.Errorf("argument %q exceeds %d bytes", key, max)

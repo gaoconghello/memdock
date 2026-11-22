@@ -601,6 +601,8 @@ func (a *app) verifyWriteSignature(w http.ResponseWriter, r *http.Request) bool 
 	return true
 }
 
+const maxMemoryContentBytes = 128 * 1024
+
 type createMemoryRequest struct {
 	ProjectID       string   `json:"project_id"`
 	KnowledgeBaseID string   `json:"knowledge_base_id"`
@@ -620,8 +622,8 @@ func (a *app) createMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Title = strings.TrimSpace(req.Title)
 	req.Content = strings.TrimSpace(req.Content)
-	if req.Title == "" || req.Content == "" || len(req.Title) > 300 || len(req.Content) > 20000 {
-		writeError(w, 400, "title and content are required (title <= 300, content <= 20000 bytes)")
+	if req.Title == "" || req.Content == "" || len(req.Title) > 300 || len(req.Content) > maxMemoryContentBytes {
+		writeError(w, 400, fmt.Sprintf("title and content are required (title <= 300, content <= %d bytes)", maxMemoryContentBytes))
 		return
 	}
 	if req.ProjectID == "" {
