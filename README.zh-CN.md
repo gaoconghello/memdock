@@ -2,6 +2,8 @@
 
 [English](README.md) | 简体中文
 
+**当前版本：0.1**
+
 MemDock 是面向 Coding Agent 的共享长期记忆服务，提供 Go/SQLite API、MCP Streamable HTTP 和 Web 管理页面。Agent 写入脚本要求交互确认；生产部署验收和移动设备访问仍未完成。
 
 ## 功能特性

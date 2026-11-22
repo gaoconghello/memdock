@@ -2,6 +2,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
+**Current version: 0.1**
+
 MemDock is a shared long-term memory service for coding agents. It provides a Go/SQLite HTTP API, an MCP Streamable HTTP endpoint, and a web management UI. Agent scripts require explicit interactive confirmation for writes. Production deployment acceptance and mobile access remain outstanding.
 
 ## Features

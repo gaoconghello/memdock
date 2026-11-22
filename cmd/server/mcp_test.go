@@ -116,7 +116,7 @@ func TestMCPOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || response.Header.Get("MCP-Protocol-Version") != mcpProtocolVersion || !strings.Contains(string(body), `"serverInfo":{"name":"memdock"`) {
+	if response.StatusCode != http.StatusOK || response.Header.Get("MCP-Protocol-Version") != mcpProtocolVersion || !strings.Contains(string(body), `"serverInfo":{"name":"memdock","version":"0.1"}`) {
 		t.Fatalf("HTTP MCP initialize: status=%d headers=%v body=%s", response.StatusCode, response.Header, body)
 	}
 }

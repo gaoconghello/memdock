@@ -41,7 +41,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 	var result any
 	switch req.Method {
 	case "initialize":
-		result = map[string]any{"protocolVersion": mcpProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "memdock", "version": "1.0.0"}}
+		result = map[string]any{"protocolVersion": mcpProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "memdock", "version": "0.1"}}
 	case "notifications/initialized", "notifications/cancelled":
 		w.WriteHeader(http.StatusAccepted)
 		return
