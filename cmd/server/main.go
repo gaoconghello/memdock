@@ -702,6 +702,7 @@ type searchRequest struct {
 	Query           string `json:"query"`
 	Tag             string `json:"tag"`
 	Limit           int    `json:"limit"`
+	ProjectOnly     bool   `json:"project_only"`
 }
 type searchResult struct {
 	ID                string `json:"id"`
@@ -728,6 +729,10 @@ func (a *app) searchMemories(w http.ResponseWriter, r *http.Request) {
 	if !a.projectExists(w, r, req.ProjectID) {
 		return
 	}
+	if req.ProjectOnly && req.KnowledgeBaseID != "" {
+		writeError(w, 400, "project_only cannot be combined with knowledge_base_id")
+		return
+	}
 	if req.KnowledgeBaseID != "" && !a.sharedKnowledgeBaseExists(w, r, req.KnowledgeBaseID) {
 		return
 	}
@@ -739,6 +744,9 @@ func (a *app) searchMemories(w http.ResponseWriter, r *http.Request) {
 	if req.KnowledgeBaseID != "" {
 		base += `m.knowledge_base_id=? AND `
 		args = append(args, req.KnowledgeBaseID)
+	} else if req.ProjectOnly {
+		base += `m.project_id=? AND `
+		args = append(args, req.ProjectID)
 	} else {
 		base += `(m.project_id=? OR m.knowledge_base_id IS NOT NULL) AND `
 		args = append(args, req.ProjectID)

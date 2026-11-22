@@ -420,6 +420,26 @@ func TestProjectAndSharedMemoryScopes(t *testing.T) {
 	if filtered := list(local, shared); strings.Contains(filtered, "local-memory") || !strings.Contains(filtered, "shared-memory") {
 		t.Fatalf("shared library filter returned project memories: %s", filtered)
 	}
+	projectList := httptest.NewRecorder()
+	a.listMemories(projectList, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+local+"&project_only=true", nil))
+	if projectList.Code != http.StatusOK || !strings.Contains(projectList.Body.String(), "local-memory") || strings.Contains(projectList.Body.String(), "shared-memory") || strings.Contains(projectList.Body.String(), "foreign-memory") {
+		t.Fatalf("project-only list scope incorrect: %d %s", projectList.Code, projectList.Body)
+	}
+	projectSearch := httptest.NewRecorder()
+	a.searchMemories(projectSearch, httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", strings.NewReader(`{"project_id":"`+local+`","query":"scope content","project_only":true}`)))
+	if projectSearch.Code != http.StatusOK || !strings.Contains(projectSearch.Body.String(), "local-memory") || strings.Contains(projectSearch.Body.String(), "shared-memory") || strings.Contains(projectSearch.Body.String(), "foreign-memory") {
+		t.Fatalf("project-only search scope incorrect: %d %s", projectSearch.Code, projectSearch.Body)
+	}
+	conflictList := httptest.NewRecorder()
+	a.listMemories(conflictList, httptest.NewRequest(http.MethodGet, "/api/v1/memories?project_id="+local+"&project_only=true&knowledge_base_id="+shared, nil))
+	if conflictList.Code != http.StatusBadRequest {
+		t.Fatalf("project-only list conflict status=%d", conflictList.Code)
+	}
+	conflictSearch := httptest.NewRecorder()
+	a.searchMemories(conflictSearch, httptest.NewRequest(http.MethodPost, "/api/v1/memories/search", strings.NewReader(`{"project_id":"`+local+`","query":"scope","project_only":true,"knowledge_base_id":"`+shared+`"}`)))
+	if conflictSearch.Code != http.StatusBadRequest {
+		t.Fatalf("project-only search conflict status=%d", conflictSearch.Code)
+	}
 	if results := search(local, ""); !strings.Contains(results, "local-memory") || !strings.Contains(results, "shared-memory") || strings.Contains(results, "foreign-memory") {
 		t.Fatalf("default search scope incorrect: %s", results)
 	}

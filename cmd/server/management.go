@@ -295,6 +295,7 @@ func (a *app) deleteKnowledgeBase(w http.ResponseWriter, r *http.Request) {
 func (a *app) listMemories(w http.ResponseWriter, r *http.Request) {
 	projectID := r.URL.Query().Get("project_id")
 	kbID := r.URL.Query().Get("knowledge_base_id")
+	projectOnly := r.URL.Query().Get("project_only") == "true"
 	status := r.URL.Query().Get("status")
 	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
 	if projectID == "" {
@@ -311,10 +312,17 @@ func (a *app) listMemories(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "status must be active or deleted")
 		return
 	}
+	if projectOnly && kbID != "" {
+		writeError(w, 400, "project_only cannot be combined with knowledge_base_id")
+		return
+	}
 	if kbID != "" && !a.sharedKnowledgeBaseExists(w, r, kbID) {
 		return
 	}
 	query := `SELECT m.id,coalesce(m.project_id,''),coalesce(m.knowledge_base_id,''),CASE WHEN m.knowledge_base_id IS NULL THEN coalesce(p.name,'') ELSE k.name END,CASE WHEN m.knowledge_base_id IS NULL THEN 'project' ELSE 'shared' END,m.title,m.content,m.category,m.status,m.created_at,m.updated_at,COALESCE((SELECT json_group_array(tag) FROM (SELECT tag FROM memory_tags WHERE memory_id=m.id ORDER BY tag)), '[]') FROM memories m LEFT JOIN knowledge_bases k ON k.id=m.knowledge_base_id LEFT JOIN projects p ON p.id=m.project_id WHERE m.status=? AND (m.project_id=? OR m.knowledge_base_id IS NOT NULL)`
+	if projectOnly {
+		query = strings.Replace(query, `(m.project_id=? OR m.knowledge_base_id IS NOT NULL)`, `m.project_id=?`, 1)
+	}
 	args := []any{status, projectID}
 	if kbID != "" {
 		query += ` AND m.knowledge_base_id=?`
