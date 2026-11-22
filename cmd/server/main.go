@@ -127,6 +127,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/projects/{id}", a.projectDetail)
 	mux.HandleFunc("GET /api/v1/projects/{id}/memories", a.listProjectMemories)
 	mux.HandleFunc("POST /api/v1/projects/{id}/repositories", a.bindRepository)
+	mux.HandleFunc("PATCH /api/v1/projects/{id}/repositories", a.updateRepositoryBinding)
 	mux.HandleFunc("DELETE /api/v1/projects/{id}/repositories", a.unbindRepository)
 	mux.HandleFunc("DELETE /api/v1/projects/{id}", a.deleteProject)
 	mux.HandleFunc("POST /api/v1/projects/{id}/merge", a.mergeProject)

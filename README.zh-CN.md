@@ -176,6 +176,8 @@ Secure API、MCP、Console 和脚本均使用同一密钥读写；密钥持有�
 
 ## Agent Skills
 
+使用 [`mem-project-binding`](skills/mem-project-binding/SKILL.md) 替换或解除仓库绑定。MCP 工具为 `project_repository_update` 和 `project_repository_delete`；先通过 `project_info` 取得项目的绑定原值。替换和解绑都不会删除记忆。如果新旧地址已经绑定同一项目，只需解除旧绑定。
+
 `skills/mem-save` 和 `skills/mem-search` 含 Codex/Pi 可识别的 Skill 元数据。Pi 可通过 `pi --skill /path/to/memdock/skills/mem-search/SKILL.md`（或 `mem-save/SKILL.md`）加载。Codex CLI 从 `$CODEX_HOME/skills` 加载 Skill，默认目录为 `~/.codex/skills`；可链接本仓库的 Skill 目录：
 
 ```sh

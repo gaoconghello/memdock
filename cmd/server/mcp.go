@@ -89,6 +89,8 @@ func mcpTools() []map[string]any {
 		{"name": "memory_list", "description": "List memories without a keyword query. By default, list the selected project and all shared libraries. For a named shared library, discover and call knowledge_base_list, match the name, and pass its ID as knowledge_base_id. A valid project_id is still required.", "inputSchema": obj(map[string]any{"project_id": lookupProjectID, "knowledge_base_id": sharedLibraryID, "status": str, "tag": str}, "project_id")},
 		{"name": "memory_update", "description": "Update a memory by ID.", "inputSchema": obj(map[string]any{"id": str, "project_id": str, "title": str, "content": str, "category": str, "tags": map[string]any{"type": "array", "items": str}}, "id", "project_id")},
 		{"name": "memory_delete", "description": "Soft-delete or restore a memory.", "inputSchema": obj(map[string]any{"id": str, "project_id": str, "action": map[string]any{"type": "string", "enum": []string{"delete", "restore"}}}, "id", "project_id", "action")},
+		{"name": "project_repository_update", "description": "Only on explicit user request, replace a repository binding within the verified project. Use project_info to obtain the exact current repository key and provide the new Git remote URL. Does not change memories. Fails if the new repository is already bound.", "inputSchema": obj(props("project_id", "repository", "new_repository"), "project_id", "repository", "new_repository")},
+		{"name": "project_repository_delete", "description": "Only on explicit user request, remove one repository binding from the verified project. Use the exact repository key from project_info. Does not delete the project or any memories.", "inputSchema": obj(props("project_id", "repository"), "project_id", "repository")},
 		{"name": "project_info", "description": "Get project details including bound repositories.", "inputSchema": obj(props("project_id"), "project_id")},
 		{"name": "knowledge_base_list", "description": "Find shared knowledge bases by name before searching, listing, or saving memories. Returns all shared library names and IDs. Match the name specified by the user and ask the user to choose if multiple libraries match.", "inputSchema": obj(map[string]any{})},
 		{"name": "project_list", "description": "List accessible projects as candidates; for an unbound local folder the user must choose a project, never select one by guessing.", "inputSchema": obj(map[string]any{})},
@@ -105,16 +107,18 @@ type mcpArgumentSpec struct {
 func validateMCPArguments(name string, args map[string]json.RawMessage) error {
 	str := func(required bool) mcpArgumentSpec { return mcpArgumentSpec{kind: "string", required: required} }
 	schemas := map[string]map[string]mcpArgumentSpec{
-		"memory_search":       {"project_id": str(true), "query": str(true), "knowledge_base_id": str(false), "tag": str(false), "limit": {kind: "integer"}},
-		"memory_save":         {"project_id": str(true), "knowledge_base_id": str(false), "title": str(true), "content": str(true), "category": str(false), "tags": {kind: "string_array"}},
-		"memory_list":         {"project_id": str(true), "knowledge_base_id": str(false), "status": str(false), "tag": str(false)},
-		"memory_update":       {"id": str(true), "project_id": str(true), "title": str(false), "content": str(false), "category": str(false), "tags": {kind: "string_array"}},
-		"memory_delete":       {"id": str(true), "project_id": str(true), "action": str(true)},
-		"project_info":        {"project_id": str(true)},
-		"knowledge_base_list": {},
-		"project_list":        {},
-		"project_lookup":      {"repository": str(false), "project_id": str(false)},
-		"project_resolve":     {"repository": str(false), "name": str(false), "project_id": str(false)},
+		"memory_search":             {"project_id": str(true), "query": str(true), "knowledge_base_id": str(false), "tag": str(false), "limit": {kind: "integer"}},
+		"memory_save":               {"project_id": str(true), "knowledge_base_id": str(false), "title": str(true), "content": str(true), "category": str(false), "tags": {kind: "string_array"}},
+		"memory_list":               {"project_id": str(true), "knowledge_base_id": str(false), "status": str(false), "tag": str(false)},
+		"memory_update":             {"id": str(true), "project_id": str(true), "title": str(false), "content": str(false), "category": str(false), "tags": {kind: "string_array"}},
+		"memory_delete":             {"id": str(true), "project_id": str(true), "action": str(true)},
+		"project_repository_update": {"project_id": str(true), "repository": str(true), "new_repository": str(true)},
+		"project_repository_delete": {"project_id": str(true), "repository": str(true)},
+		"project_info":              {"project_id": str(true)},
+		"knowledge_base_list":       {},
+		"project_list":              {},
+		"project_lookup":            {"repository": str(false), "project_id": str(false)},
+		"project_resolve":           {"repository": str(false), "name": str(false), "project_id": str(false)},
 	}
 	schema, ok := schemas[name]
 	if !ok {
@@ -274,11 +278,16 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 		} else {
 			method, path = "DELETE", "/api/v1/memories/"+get("id")
 		}
+	case "project_repository_update":
+		method, path = "PATCH", "/api/v1/projects/"+url.PathEscape(get("project_id"))+"/repositories"
+	case "project_repository_delete":
+		method, path = "DELETE", "/api/v1/projects/"+url.PathEscape(get("project_id"))+"/repositories"
 	case "project_info":
 		method, path = "GET", "/api/v1/projects/"+get("project_id")
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
+	projectBindingID := get("project_id")
 	var body []byte
 	if method != "GET" {
 		if name == "memory_update" || name == "memory_delete" {
@@ -286,6 +295,9 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 		}
 		if name == "memory_delete" {
 			delete(args, "action")
+		}
+		if name == "project_repository_update" || name == "project_repository_delete" {
+			delete(args, "project_id")
 		}
 		body, _ = json.Marshal(args)
 	}
@@ -308,6 +320,9 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 				req.SetPathValue("id", parts[len(parts)-2])
 			}
 		}
+	}
+	if name == "project_repository_update" || name == "project_repository_delete" {
+		req.SetPathValue("id", projectBindingID)
 	}
 	rec := httptest.NewRecorder()
 	var handler http.HandlerFunc
@@ -334,6 +349,10 @@ func (a *app) callMCPTool(parent *http.Request, name string, raw json.RawMessage
 		} else {
 			handler = a.deleteMemory
 		}
+	case "project_repository_update":
+		handler = a.updateRepositoryBinding
+	case "project_repository_delete":
+		handler = a.unbindRepository
 	case "project_info":
 		handler = a.projectDetail
 	}

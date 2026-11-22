@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 func (a *app) projectDetail(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +68,54 @@ func (a *app) bindRepository(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 201, map[string]string{"repository": repo, "project_id": id})
 }
+
+// Accept the exact canonical value returned by projectDetail, including legacy
+// bindings, as well as a Git remote URL.
+func repositoryBindingKey(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		if u, err := url.Parse("https://" + raw); err == nil && u.Host != "" && u.User == nil && strings.Trim(u.Path, "/") != "" {
+			return raw, nil
+		}
+	}
+	return normalizeRepository(raw)
+}
+
+func (a *app) updateRepositoryBinding(w http.ResponseWriter, r *http.Request) {
+	if !a.verifyWriteSignature(w, r) {
+		return
+	}
+	var req struct {
+		Repository    string `json:"repository"`
+		NewRepository string `json:"new_repository"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	oldRepo, oldErr := repositoryBindingKey(req.Repository)
+	newRepo, newErr := normalizeRepository(req.NewRepository)
+	if oldErr != nil || newErr != nil || oldRepo == "" || newRepo == "" {
+		writeError(w, 400, "repository and a valid new_repository Git remote are required")
+		return
+	}
+	id := r.PathValue("id")
+	res, err := a.db.ExecContext(r.Context(), `UPDATE repositories SET canonical=? WHERE canonical=? AND project_id=?`, newRepo, oldRepo, id)
+	if err != nil {
+		var constraint *sqlite.Error
+		if errors.As(err, &constraint) && constraint.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY {
+			writeError(w, 409, "new repository is already bound")
+			return
+		}
+		writeError(w, 500, "database error")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, 404, "repository binding not found")
+		return
+	}
+	writeJSON(w, 200, map[string]string{"repository": newRepo, "project_id": id})
+}
+
 func (a *app) unbindRepository(w http.ResponseWriter, r *http.Request) {
 	if !a.verifyWriteSignature(w, r) {
 		return
@@ -74,7 +126,7 @@ func (a *app) unbindRepository(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	repo, err := normalizeRepository(req.Repository)
+	repo, err := repositoryBindingKey(req.Repository)
 	if err != nil || repo == "" {
 		writeError(w, 400, "valid repository is required")
 		return
