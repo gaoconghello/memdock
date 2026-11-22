@@ -24,3 +24,14 @@ description: Save a user-requested memory to MemDock after explicit confirmation
 优先从实际项目目录运行保存脚本，由脚本展示目标并等待确认。直接调用 MCP 时也必须在客户端完成上述识别；如果无法确定项目目录或读取绑定所需的本地信息，先请用户明确目标，不能从 `project_list` 自行选中 `memdock`。需要新建时，在用户确认后调用 `project_resolve`，用返回的 `project_id` 调用 `memory_save`。无 Remote 时，用户选择或创建项目后，将 ID 保存到上述目录绑定文件，供后续保存使用。
 
 Secure 模式下，脚本需要先有可查到的项目。首次新建可在用户确认后通过 `project_resolve` 创建，再按上述方式建立本地绑定。
+
+## 保存到共享库
+
+用户给出共享库名称（例如 `shared`）时，调用 MCP 的 `knowledge_base_list`，或用脚本所配置的 MemDock 服务请求 `GET /api/v1/knowledge-bases`。按 `name` 精确匹配并取返回的 `id`。有多个同名库时请用户选择，找不到时先报告并请用户确认目标。
+
+用户要求同时保存为项目记忆和共享记忆时，先识别项目并查到共享库 ID，再分别写入：
+
+- 项目记忆：脚本取消设置 `MEMDOCK_KNOWLEDGE_BASE_ID`，MCP 调用省略 `knowledge_base_id`。
+- 共享记忆：脚本仅为该次调用设置 `MEMDOCK_KNOWLEDGE_BASE_ID`，MCP 调用传入查到的 `knowledge_base_id`。两次 MCP 调用均传入已核实的 `project_id`。
+
+沿用各入口的写入确认流程，分别报告两次保存的结果。若只有一次成功，指出已保存的目标以及失败的目标。

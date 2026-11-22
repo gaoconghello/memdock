@@ -61,8 +61,28 @@ func TestSecureMCPProjectCreateAndSaveWithUnifiedSecret(t *testing.T) {
 	if failed {
 		t.Fatal("save failed")
 	}
+	_, err := a.db.Exec(`INSERT INTO knowledge_bases(id,name,created_at) VALUES('kb_shared','shared','2026-01-01')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	libraries, failed := call("knowledge_base_list", `{}`)
+	var items []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if failed || json.Unmarshal(libraries["knowledge_bases"], &items) != nil || len(items) != 1 || items[0].Name != "shared" || items[0].ID != "kb_shared" {
+		t.Fatalf("list shared libraries: %v", libraries)
+	}
+	_, failed = call("memory_save", `{"project_id":"`+id+`","knowledge_base_id":"`+items[0].ID+`","title":"test","content":"saved"}`)
+	if failed {
+		t.Fatal("shared save failed")
+	}
+	var sharedCount int
+	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE knowledge_base_id='kb_shared' AND project_id IS NULL AND title='test'`).Scan(&sharedCount); err != nil || sharedCount != 1 {
+		t.Fatalf("shared memory count %d: %v", sharedCount, err)
+	}
 	var count int
-	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE title='test'`).Scan(&count); err != nil || count != 1 {
+	if err := a.db.QueryRow(`SELECT count(*) FROM memories WHERE title='test' AND project_id=? AND knowledge_base_id IS NULL`, id).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("memory count %d: %v", count, err)
 	}
 	search, failed := call("memory_search", `{"project_id":"`+id+`","query":"saved"}`)
